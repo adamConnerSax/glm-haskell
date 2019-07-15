@@ -11,7 +11,6 @@ import qualified Data.Text                     as T
 --import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 import qualified Polysemy                      as P
-import qualified Polysemy.Output               as P
 import qualified Polysemy.Trace                as P
 
 log :: P.Member P.Trace r => T.Text -> P.Sem r ()

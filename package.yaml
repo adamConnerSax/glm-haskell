@@ -50,3 +50,10 @@ library:
         - -fplugin=DumpCore
         - -fplugin-opt DumpCore:core-html
 
+tests:
+  buildZ-test:
+    main: buildZ.hs
+    source-dirs: test
+    ghc-options: -O -Wall -fplugin=Polysemy.Plugin
+    dependencies:
+      - glm-haskell

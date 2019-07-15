@@ -9,11 +9,13 @@
 {-# LANGUAGE UndecidableInstances        #-}
 
 {-# LANGUAGE QuantifiedConstraints       #-}
+
+
 module Polysemy.ConstraintAbsorber.MonadCatch
-  ( absorbMonadCatch
+  ( --absorbMonadCatch
   )
 where
-
+{-
 import qualified Control.Monad.Catch           as C
 import           Polysemy
 import           Polysemy.ConstraintAbsorber
@@ -80,3 +82,4 @@ instance ( Monad m
   catch x f = Action $ catch_ (reflect $ Proxy @s') (action x) (action . f)
   {-# INLINEABLE catch #-}
 
+-}
