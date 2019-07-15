@@ -34,18 +34,19 @@ makeZ
   -> RowClassifier
   -> P.Sem r (SLA.SpMatrix a)
 makeZ mX levels rc = do
-  let
-    (nO, nP) = LA.size mX
-    k        = VB.length levels -- number of levels
-    levelSize n = let (s, _, _) = levels VB.! n in s
-    colsForLevel (qL, b, vbM) =
-      qL * ((if b then 1 else 0) + (maybe 0 length vbM))
-    q = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
+  let (nO, nP) = LA.size mX
+      k        = VB.length levels -- number of levels
+      levelSize n = let (s, _, _) = levels VB.! n in s
+      colsForLevel (qL, b, vbM) =
+        qL * ((if b then 1 else 0) + (maybe 0 (length . VB.filter id) vbM))
+      q = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
+{-      
   liftIO $ do
     putStrLn "X="
     LA.disp 2 mX
     putStrLn $ "We have " ++ show k ++ " levels"
     putStrLn $ "And should get " ++ show q ++ " columns in Z"
+-}
     -- build list of items to put in Z, level by level
   let
     obsIndices = Seq.fromFunction nO id
@@ -89,4 +90,9 @@ makeZ mX levels rc = do
       (Seq.empty, 0, 0)
       id
     (zEntries, numCols, _) = FL.fold zFold levels
+{-    
+  liftIO $ do
+    putStrLn $ "numCols=" ++ show numCols
+    putStrLn $ "entries=" ++ show zEntries
+-}
   return $ SLA.fromListSM (nO, q) zEntries
