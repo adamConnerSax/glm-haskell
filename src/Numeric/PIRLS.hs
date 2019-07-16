@@ -1,19 +1,50 @@
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Numeric.PIRLS where
 
 import qualified Polysemy                      as P
+import qualified Polysemy.Error                as P
 import qualified GLM.Internal.Log              as Log
 import qualified Control.Foldl                 as FL
+import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
+
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Data.Sparse.SpMatrix          as SLA
+import qualified Data.Sparse.SpVector          as SLA
+import qualified Numeric.LinearAlgebra.Class   as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
+import           Numeric.LinearAlgebra.Sparse   ( (##)
+                                                , (#^#)
+                                                , (<#)
+                                                , (#>)
+                                                , (-=-)
+                                                , (-||-)
+                                                )
+import           Data.Either                    ( partitionEithers )
+import qualified Data.List                     as L
 import qualified Data.Sequence                 as Seq
+import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
+import qualified Data.Vector.Storable          as VS
 
-type Levels = VB.Vector (Int, Bool, Maybe (VB.Vector Bool)) -- level sizes and effects
+type LevelSpec = (Int, Bool, Maybe (VB.Vector Bool)) -- level sizes and effects
+
+effectsForLevel :: LevelSpec -> Int
+effectsForLevel (_, b, vbM) =
+  (if b then 1 else 0) + (maybe 0 (length . VB.filter id) vbM)
+{-# INLINABLE effectsForLevel #-}
+
+colsForLevel :: LevelSpec -> Int
+colsForLevel l@(qL, _, _) = qL * effectsForLevel l
+{-# INLINABLE colsForLevel #-}
+
+type Levels = VB.Vector LevelSpec
 
 -- classify row into its levels
 -- the vector has a level number for each level
@@ -26,10 +57,14 @@ type RowClassifier = Int -> VB.Vector Int
 -- NB:  If X has a constant column, there is redundancy
 -- here between the Bool in the tuple and the first bool
 -- in the vector.
-type LevelEffectsSpec = [(Bool, Maybe (LA.Vector Bool))]
+--type LevelEffectsSpec = [(Bool, Maybe (LA.Vector Bool))]
+
+type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
+runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
+runPIRLS_M = P.runM . P.runError
 
 makeZ
-  :: (LA.Container LA.Vector a, RealFrac a, MonadIO (P.Sem r), a ~ Double)
+  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
   => LA.Matrix a
   -> Levels
   -> RowClassifier
@@ -38,8 +73,7 @@ makeZ mX levels rc = do
   let (nO, nP) = LA.size mX
       k        = VB.length levels -- number of levels
       levelSize n = let (s, _, _) = levels VB.! n in s
-      colsForLevel (qL, b, vbM) =
-        qL * ((if b then 1 else 0) + (maybe 0 (length . VB.filter id) vbM))
+
       q = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
 {-      
   liftIO $ do
@@ -97,3 +131,171 @@ makeZ mX levels rc = do
     putStrLn $ "entries=" ++ show zEntries
 -}
   return $ SLA.fromListSM (nO, q) zEntries
+
+toSparseMatrix
+  :: (LA.Container LA.Vector a, RealFrac a) => LA.Matrix a -> SLA.SpMatrix a
+toSparseMatrix x
+  = let
+      (r, c)     = LA.size x
+      colIndices = take c $ L.iterate (+ 1) 0
+      rowIndices = take r $ L.iterate (+ 1) 0
+      indexRow rI =
+        fmap (\(cI, val) -> (rI, cI, val)) . zip colIndices . LA.toList
+      indexedRows =
+        concat . fmap (\(rI, rV) -> indexRow rI rV) . zip rowIndices . LA.toRows
+    in
+      SLA.fromListSM (r, c) $ indexedRows x
+
+toSparseVector
+  :: (LA.Container LA.Vector a, RealFrac a) => LA.Vector a -> SLA.SpVector a
+toSparseVector v = SLA.fromListDenseSV (LA.size v) $ LA.toList v
+
+{-
+n rows
+p fixed effects
+l effect levels
+n_l number of categories in level l
+q_l number of (random) effects in level l
+q = sum (n_l * q_l)
+X is n x p
+Z is n x q
+zTz is q x q, this is the part that will be sparse.
+-}
+makeA
+  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  => LA.Matrix a
+  -> LA.Vector a
+  -> SLA.SpMatrix a
+  -> P.Sem r (SLA.SpMatrix a)
+makeA mX vY smZ = do
+  let (xRows, xCols) = LA.size mX
+      yRows          = LA.size vY
+      (zRows, zCols) = SLA.dim smZ
+  when (xRows /= zRows)
+    $  P.throw @T.Text
+    $  (T.pack $ show xRows)
+    <> " cols in X but "
+    <> (T.pack $ show zRows)
+    <> " cols in Z"
+  when (yRows /= xRows)
+    $  P.throw @T.Text
+    $  (T.pack $ show xRows)
+    <> " cols in X but "
+    <> (T.pack $ show yRows)
+    <> " entries in Y"
+  let smX   = toSparseMatrix mX
+      svY   = toSparseVector vY
+      zTz   = smZ SLA.#^# smZ
+      zTx   = smZ SLA.#^# smX
+      xTz   = smX SLA.#^# smZ
+      xTx   = smX SLA.#^# smX
+      m_zTy = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smZ SLA.#> svY)]
+      m_xTy = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smX SLA.#> svY)]
+      m_yTz = SLA.transpose $ SLA.fromColsL $ [(-1) SLA..* (svY SLA.<# smZ)]
+      m_yTx = SLA.transpose $ SLA.fromColsL $ [(-1) SLA..* (svY SLA.<# smX)]
+      yTy   = SLA.fromListSM (1, 1) [(0, 0, svY SLA.<.> svY)]
+      c1    = (zTz SLA.-=- xTz) SLA.-=- m_yTz
+      c2    = (zTx SLA.-=- xTx) SLA.-=- m_yTx
+      c3    = (m_zTy SLA.-=- m_xTy) SLA.-=- yTy
+  return $ (c1 SLA.-||- c2) SLA.-||- c3
+
+
+-- S is the diagonal matrix of covariances in theta
+-- T is unit-lower-triangular of off-diagonal covariances
+makeSTF
+  :: (SemC r, Num a, VS.Storable a)
+  => Levels
+  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+makeSTF levels
+  = let
+      f
+        :: Num a
+        => LevelSpec
+        -> ([a] -> [(Int, Int, a)], [a] -> [(Int, Int, a)], Int, Int)
+      f l@(n, _, _) =
+        let
+          e = effectsForLevel l
+          s' th =
+            fmap (\(x, v) -> (x, x, v)) $ zip (take e $ L.iterate (+ 1) 0) th
+          tlt' th = fmap (\((r, c), v) -> (r, c, v)) $ zip
+            ([ (r, c) | c <- [0 .. (e - 1)], r <- [(c + 1) .. (e - 1)] ])
+            th
+          t' th =
+            tlt' th ++ fmap (\x -> (x, x, 1)) (L.take e $ L.iterate (+ 1) 0)
+        in
+          (s', t', e, n)
+      makers = fmap f levels
+      diagOffset o = fmap (\(r, c, v) -> (r + o, c + o, v))
+      diagCopiesFrom i e n ivs =
+        mconcat $ fmap (flip diagOffset ivs) $ L.take n $ L.iterate (+ e) i
+    in
+      \thV -> do
+        let thL = LA.toList thV
+            fld = FL.Fold
+              (\(sL, tL, thL', offset) (s', t', e, n) ->
+                ( sL ++ diagCopiesFrom offset e n (s' thL')
+                , tL ++ diagCopiesFrom offset e n (t' $ L.drop e thL')
+                , L.drop (e + (e * (e - 1) `div` 2)) thL'
+                , offset + (e * n)
+                )
+              )
+              ([], [], thL, 0)
+              id
+            (s, t, _, qT) = FL.fold fld makers
+        return $ (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
+
+
+makeAStar
+  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  => Int -- ^ p (cols of X)
+  -> Int -- ^ q (cols of Z) 
+  -> SLA.SpMatrix a -- ^ A
+  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> LA.Vector a -- ^ theta
+  -> P.Sem r (SLA.SpMatrix a)
+makeAStar p q smA mkST vTh = do
+  (smS, smT) <- mkST vTh
+  let tTs = smT #^# smS
+      st  = smS ## smT
+      m1 =
+        (tTs -||- SLA.zeroSM q p -||- SLA.zeroSM q 1)
+          -=- (SLA.zeroSM p q -||- SLA.eye p -||- SLA.zeroSM p 1)
+          -=- (SLA.zeroSM 1 q -||- SLA.zeroSM 1 p -||- SLA.eye 1)
+      m2 =
+        (st -||- SLA.zeroSM q p -||- SLA.zeroSM q 1)
+          -=- (SLA.zeroSM p q -||- SLA.eye p -||- SLA.zeroSM p 1)
+          -=- (SLA.zeroSM 1 q -||- SLA.zeroSM 1 p -||- SLA.eye 1)
+      m3 =
+        (SLA.eye q -||- SLA.zeroSM q p -||- SLA.zeroSM q 1)
+          -=- (SLA.zeroSM p q -||- SLA.zeroSM p p -||- SLA.zeroSM p 1)
+          -=- (SLA.zeroSM 1 q -||- SLA.zeroSM 1 p -||- SLA.zeroSM 1 1)
+  return $ (m1 ## smA ## m2) SLA.^+^ m3
+
+
+makeAStar'
+  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  => LA.Matrix a  -- ^ X
+  -> LA.Vector a -- ^ y
+  -> SLA.SpMatrix a -- ^ Z
+  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> LA.Vector a -- ^ theta
+  -> P.Sem r (SLA.SpMatrix a)
+makeAStar' mX vY smZ mkST vTh = do
+  (smS, smT) <- mkST vTh
+  let smX    = toSparseMatrix mX
+      svY    = toSparseVector vY
+      (_, q) = SLA.dim smZ
+      smZS   = smZ ## smT ## smS
+      zsTzs  = smZS #^# smZS
+      zsTx   = smZS #^# smX
+      xTzs   = smX #^# smZS
+      xTx    = smX #^# smX
+      m_zsTy = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smZS SLA.#> svY)]
+      m_xTy  = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smX SLA.#> svY)]
+      m_yTzs = SLA.transpose $ SLA.fromColsL $ [(-1) SLA..* (svY SLA.<# smZS)]
+      m_yTx  = SLA.transpose $ SLA.fromColsL $ [(-1) SLA..* (svY SLA.<# smX)]
+      yTy    = SLA.fromListSM (1, 1) [(0, 0, svY SLA.<.> svY)]
+      c1     = ((zsTzs SLA.^+^ SLA.eye q) -=- xTzs) -=- m_yTzs
+      c2     = (zsTx -=- xTx) -=- m_yTx
+      c3     = (m_zsTy -=- m_xTy) -=- yTy
+  return $ (c1 SLA.-||- c2) SLA.-||- c3

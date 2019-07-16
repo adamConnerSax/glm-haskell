@@ -2,14 +2,10 @@
 {-# LANGUAGE FlexibleContexts            #-}
 {-# LANGUAGE GADTs                       #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving  #-}
-{-# LANGUAGE MultiParamTypeClasses       #-}
 {-# LANGUAGE RankNTypes                  #-}
 {-# LANGUAGE ScopedTypeVariables         #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeApplications            #-}
 {-# LANGUAGE UndecidableInstances        #-}
-
-{-# LANGUAGE QuantifiedConstraints       #-}
-
 
 module Polysemy.ConstraintAbsorber.MonadCatch
   (
@@ -37,9 +33,8 @@ absorbMonadCatch
        -- or 'C.MonadThrow' for
        -- 'Sem'. This might be something with type @'C.MonadCatch' e m => m a@.
   -> Sem r a
-absorbMonadCatch = absorbWithSem @C.MonadCatch @Action
-  (CatchDict E.throw E.catch)
-  (Sub Dict)
+absorbMonadCatch =
+  absorbWithSem @C.MonadCatch @Action (CatchDict E.throw E.catch) (Sub Dict)
 {-# INLINABLE absorbMonadCatch #-}
 
 absorbMonadThrow
