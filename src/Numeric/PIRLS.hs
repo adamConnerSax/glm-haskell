@@ -16,6 +16,7 @@ import qualified Data.Vector                   as VB
 type Levels = VB.Vector (Int, Bool, Maybe (VB.Vector Bool)) -- level sizes and effects
 
 -- classify row into its levels
+-- the vector has a level number for each level
 type RowClassifier = Int -> VB.Vector Int
 
 -- for group k, what group effects are we modeling?

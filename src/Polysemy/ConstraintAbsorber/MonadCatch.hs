@@ -12,10 +12,13 @@
 
 
 module Polysemy.ConstraintAbsorber.MonadCatch
-  ( --absorbMonadCatch
+  (
+    -- * Constraint Absorbers
+    absorbMonadThrow
+  , absorbMonadCatch
   )
 where
-{-
+
 import qualified Control.Monad.Catch           as C
 import           Polysemy
 import           Polysemy.ConstraintAbsorber
@@ -28,27 +31,33 @@ import qualified Polysemy.Error                as E
 --
 -- @since 0.5.0.0
 absorbMonadCatch
-  :: forall r a
-   . (forall e. (Member (E.Error e) r
-                ,C.Exception e)
-     )
+  :: Member (E.Error C.SomeException) r
   => (C.MonadCatch (Sem r) => Sem r a)
        -- ^ A computation that requires an instance of 'C.MonadCatch'
        -- or 'C.MonadThrow' for
        -- 'Sem'. This might be something with type @'C.MonadCatch' e m => m a@.
   -> Sem r a
 absorbMonadCatch = absorbWithSem @C.MonadCatch @Action
-  (ThrowDict (E.throw) (E.catch))
+  (CatchDict E.throw E.catch)
   (Sub Dict)
 {-# INLINABLE absorbMonadCatch #-}
 
+absorbMonadThrow
+  :: Member (E.Error C.SomeException) r
+  => (C.MonadThrow (Sem r) => Sem r a)
+       -- ^ A computation that requires an instance of 'C.MonadCatch'
+       -- or 'C.MonadThrow' for
+       -- 'Sem'. This might be something with type @'C.MonadCatch' e m => m a@.
+  -> Sem r a
+absorbMonadThrow = absorbMonadCatch
+{-# INLINABLE absorbMonadThrow #-}
 
 ------------------------------------------------------------------------------
 -- | A dictionary of the functions we need to supply
 -- to make an instance of Error
-data ThrowDict m = ThrowDict
-  { throwM_ :: forall a e. e -> m a
-  , catch_ :: forall a e. m a -> (e -> m a) -> m a
+data CatchDict m = CatchDict
+  { throwM_ :: forall a. C.SomeException -> m a
+  , catch_ :: forall a. m a -> (C.SomeException -> m a) -> m a
   }
 
 
@@ -67,19 +76,19 @@ newtype Action m s' a = Action { action :: m a }
 -- we can make an instance of @MonadError@ for the action
 -- wrapped in @Action@.
 instance ( Monad m
-         , forall e. (C.Exception e
-                     , Reifies s' (ThrowDict m)
-                     )
+         , Reifies s' (CatchDict m)
          ) => C.MonadThrow (Action m s') where
-  throwM e = Action $ throwM_ (reflect $ Proxy @s') e
+  throwM e = Action $ throwM_ (reflect $ Proxy @s') (C.toException e)
   {-# INLINEABLE throwM #-}
 
 instance ( Monad m
-         , forall e. (C.Exception e
-                     , Reifies s' (ThrowDict m)
-                     )
-         ) => C.MonadCatch (Action m s') where
-  catch x f = Action $ catch_ (reflect $ Proxy @s') (action x) (action . f)
+         , Reifies s' (CatchDict m)
+         )  => C.MonadCatch (Action m s') where
+  catch x f =
+    let catchF = catch_ (reflect $ Proxy @s')
+    in Action $ (action x) `catchF` \e -> case C.fromException e of
+      Just e' -> action $ f e'
+      _ -> throwM_ (reflect $ Proxy @s') (C.toException e)
   {-# INLINEABLE catch #-}
 
--}
+
