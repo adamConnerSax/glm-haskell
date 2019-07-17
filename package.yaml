@@ -39,7 +39,7 @@ flags:
     manual:      True
 
 library:
-  ghc-options: -O -Wall -fplugin=Polysemy.Plugin
+  ghc-options: -O -Wall 
   source-dirs: src
   when:
     - condition: flag(dump-core)
@@ -53,7 +53,7 @@ tests:
   buildZ-test:
     main: buildZ.hs
     source-dirs: test
-    ghc-options: -O -Wall -fplugin=Polysemy.Plugin
+    ghc-options: -O -Wall 
     dependencies:
       - glm-haskell
       - Frames

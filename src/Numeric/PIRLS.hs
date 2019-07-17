@@ -32,6 +32,7 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (-||-)
                                                 )
 import qualified Numeric.LinearAlgebra         as LA
+import qualified Numeric.NLOPT                 as NL
 
 
 
@@ -68,33 +69,27 @@ type RowClassifier = Int -> VB.Vector Int
 -- in the vector.
 --type LevelEffectsSpec = [(Bool, Maybe (LA.Vector Bool))]
 
-type SemC r = (MonadIO (P.Sem r), P.Member (P.Error SomeException) r, P.Member (P.Error T.Text) r)
+type SemC r = (MonadIO (P.Sem r), {- P.Member (P.Error SomeException) r,-} P.Member (P.Error T.Text) r)
 runPIRLS_M
-  :: P.Sem '[P.Error SomeException, P.Error T.Text, P.Lift IO] a
+  :: P.Sem '[{-P.Error SomeException,-}
+             P.Error T.Text, P.Lift IO] a
   -> IO (Either T.Text a)
-runPIRLS_M = P.runM . P.runError . P.runErrorAsAnother (T.pack . show)
+runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
 
 makeZ
-  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
   => LA.Matrix a
   -> Levels
   -> RowClassifier
-  -> P.Sem r (SLA.SpMatrix a)
-makeZ mX levels rc = do
-  let (nO, nP) = LA.size mX
-      k        = VB.length levels -- number of levels
-      levelSize n = let (s, _, _) = levels VB.! n in s
-
-      q = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
-{-      
-  liftIO $ do
-    putStrLn "X="
-    LA.disp 2 mX
-    putStrLn $ "We have " ++ show k ++ " levels"
-    putStrLn $ "And should get " ++ show q ++ " columns in Z"
--}
-    -- build list of items to put in Z, level by level
+  -> SLA.SpMatrix a
+makeZ mX levels rc =
   let
+    (nO, nP) = LA.size mX
+    k        = VB.length levels -- number of levels
+    levelSize n = let (s, _, _) = levels VB.! n in s
+
+    q          = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
+    -- build list of items to put in Z, level by level
     obsIndices = Seq.fromFunction nO id
     intercept startingCol level =
       let spIndex obsIndex = (obsIndex, rc obsIndex VB.! level)
@@ -136,12 +131,8 @@ makeZ mX levels rc = do
       (Seq.empty, 0, 0)
       id
     (zEntries, numCols, _) = FL.fold zFold levels
-{-    
-  liftIO $ do
-    putStrLn $ "numCols=" ++ show numCols
-    putStrLn $ "entries=" ++ show zEntries
--}
-  return $ SLA.fromListSM (nO, q) zEntries
+  in
+    SLA.fromListSM (nO, q) zEntries
 
 asDense sp =
   LA.matrix (snd $ SLA.dimSM sp) $ fmap (\(_, _, x) -> x) $ SLA.toDenseListSM sp
@@ -164,24 +155,13 @@ toSparseVector
   :: (LA.Container LA.Vector a, RealFrac a) => LA.Vector a -> SLA.SpVector a
 toSparseVector v = SLA.fromListDenseSV (LA.size v) $ LA.toList v
 
-{-
-n rows
-p fixed effects
-l effect levels
-n_l number of categories in level l
-q_l number of (random) effects in level l
-q = sum (n_l * q_l)
-X is n x p
-Z is n x q
-zTz is q x q, this is the part that will be sparse.
--}
-makeA
-  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+checkProblem
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
   => LA.Matrix a -- ^ X
   -> LA.Vector a -- ^ y
-  -> SLA.SpMatrix a -- ^ Z 
-  -> P.Sem r (SLA.SpMatrix a)
-makeA mX vY smZ = do
+  -> SLA.SpMatrix a -- ^ Z
+  -> P.Sem r ()
+checkProblem mX vY smZ = do
   let (n, p)     = LA.size mX
       yRows      = LA.size vY
       (zRows, q) = SLA.dim smZ
@@ -197,29 +177,54 @@ makeA mX vY smZ = do
     <> " cols in X but "
     <> (T.pack $ show yRows)
     <> " entries in Y"
-  let smX   = toSparseMatrix mX
-      svY   = toSparseVector vY
-      zTz   = smZ SLA.#^# smZ
-      zTx   = smZ SLA.#^# smX
-      xTz   = smX SLA.#^# smZ
-      xTx   = smX SLA.#^# smX
-      m_zTy = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smZ SLA.#> svY)]
-      m_xTy = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smX SLA.#> svY)]
+  return ()
+
+
+{-
+n rows
+p fixed effects
+l effect levels
+n_l number of categories in level l
+q_l number of (random) effects in level l
+q = sum (n_l * q_l)
+X is n x p
+Z is n x q
+zTz is q x q, this is the part that will be sparse.
+-}
+makeA
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
+  => LA.Matrix a -- ^ X
+  -> LA.Vector a -- ^ y
+  -> SLA.SpMatrix a -- ^ Z 
+  -> SLA.SpMatrix a
+makeA mX vY smZ =
+  let (n, p)     = LA.size mX
+      yRows      = LA.size vY
+      (zRows, q) = SLA.dim smZ
+      smX        = toSparseMatrix mX
+      svY        = toSparseVector vY
+      zTz        = smZ SLA.#^# smZ
+      zTx        = smZ SLA.#^# smX
+      xTz        = smX SLA.#^# smZ
+      xTx        = smX SLA.#^# smX
+      m_zTy      = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smZ SLA.#> svY)]
+      m_xTy      = SLA.fromColsL $ [(-1) SLA..* (SLA.transpose smX SLA.#> svY)]
       m_yTz = SLA.transpose $ SLA.fromColsL $ [(-1) SLA..* (svY SLA.<# smZ)]
       m_yTx = SLA.transpose $ SLA.fromColsL $ [(-1) SLA..* (svY SLA.<# smX)]
-      yTy   = SLA.fromListSM (1, 1) [(0, 0, svY SLA.<.> svY)]
-      c1    = (zTz SLA.-=- xTz) SLA.-=- m_yTz
-      c2    = (zTx SLA.-=- xTx) SLA.-=- m_yTx
-      c3    = (m_zTy SLA.-=- m_xTy) SLA.-=- yTy
-  return $ (c1 SLA.-||- c2) SLA.-||- c3
+      yTy        = SLA.fromListSM (1, 1) [(0, 0, svY SLA.<.> svY)]
+      c1         = (zTz SLA.-=- xTz) SLA.-=- m_yTz
+      c2         = (zTx SLA.-=- xTx) SLA.-=- m_yTx
+      c3         = (m_zTy SLA.-=- m_xTy) SLA.-=- yTy
+  in  (c1 SLA.-||- c2) SLA.-||- c3
+
 
 
 -- S is the diagonal matrix of covariances in theta
 -- T is unit-lower-triangular of off-diagonal covariances
 makeSTF
-  :: (SemC r, Num a, VS.Storable a)
+  :: (Num a, VS.Storable a)
   => Levels
-  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
 makeSTF levels
   = let
       f
@@ -243,7 +248,7 @@ makeSTF levels
       diagCopiesFrom i e n ivs =
         mconcat $ fmap (flip diagOffset ivs) $ L.take n $ L.iterate (+ e) i
     in
-      \thV -> do
+      \thV ->
         let thL = LA.toList thV
             fld = FL.Fold
               (\(sL, tL, thL', offset) (s', t', e, n) ->
@@ -256,21 +261,21 @@ makeSTF levels
               ([], [], thL, 0)
               id
             (s, t, _, qT) = FL.fold fld makers
-        return $ (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
+        in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
 
 
 makeAStar
-  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
   => Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z) 
   -> SLA.SpMatrix a -- ^ A
-  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
   -> LA.Vector a -- ^ theta
-  -> P.Sem r (SLA.SpMatrix a)
-makeAStar p q smA mkST vTh = do
-  (smS, smT) <- mkST vTh
-  let tTs = smT #^# smS
-      st  = smS ## smT
+  -> SLA.SpMatrix a
+makeAStar p q smA mkST vTh =
+  let (smS, smT) = mkST vTh
+      tTs        = smT #^# smS
+      st         = smS ## smT
       m1 =
         (tTs -||- SLA.zeroSM q p -||- SLA.zeroSM q 1)
           -=- (SLA.zeroSM p q -||- SLA.eye p -||- SLA.zeroSM p 1)
@@ -283,7 +288,7 @@ makeAStar p q smA mkST vTh = do
         (SLA.eye q -||- SLA.zeroSM q p -||- SLA.zeroSM q 1)
           -=- (SLA.zeroSM p q -||- SLA.zeroSM p p -||- SLA.zeroSM p 1)
           -=- (SLA.zeroSM 1 q -||- SLA.zeroSM 1 p -||- SLA.zeroSM 1 1)
-  return $ (m1 ## smA ## m2) SLA.^+^ m3
+  in  (m1 ## smA ## m2) SLA.^+^ m3
 
 
 makeAStar'
@@ -319,33 +324,86 @@ makeAStar' mX vY smZ mkST vTh = do
 
 -- since A* is (p + q + 1) x (p + q + 1) so is L
 profiledDeviance
-  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
   => Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z)
   -> Int -- ^ n (rows of X or Z)
   -> SLA.SpMatrix a -- ^ A
-  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
   -> LA.Vector a -- ^ theta
-  -> P.Sem r a
-profiledDeviance p q n smA mkST th = do
-  smAS <- makeAStar p q smA mkST th
---  cholL <- absorbMonadThrow $ SLA.chol smAS -- this is likely slow.  TODO: cholmod
---  liftIO $ do
---    putStrLn "L="
---    LA.disp 2 $ asDense cholL
-  let cholL = LA.tr $ LA.chol $ LA.trustSym $ asDense smAS
-  liftIO $ do
-    putStrLn "L="
-    LA.disp 2 $ cholL
-  let getDiag :: Int -> Double
-      getDiag n = cholL `LA.atIndex` (n, n)
-      r          = getDiag $ p + q
-      logZStZSpI = realToFrac 2
-        * FL.fold (FL.premap (log . getDiag) FL.sum) [0 .. (q - 1)]
-  liftIO $ putStrLn $ "r=" ++ show r
-  liftIO $ putStrLn $ "ldL2=" ++ show logZStZSpI
+  -> (a, a, a, LA.Matrix a)
+profiledDeviance p q n smA mkST th =
   let
-    d =
-      let rn = realToFrac n
-      in  logZStZSpI + rn * (1 + log (2 * pi * r * r / rn))
-  return d
+    smAS  = makeAStar p q smA mkST th
+    cholL = LA.tr $ LA.chol $ LA.trustSym $ asDense smAS
+    getDiag :: Int -> Double
+    getDiag n = cholL `LA.atIndex` (n, n)
+    r = getDiag $ p + q
+    ldL2 =
+      realToFrac 2 * FL.fold (FL.premap (log . getDiag) FL.sum) [0 .. (q - 1)]
+    d = let rn = realToFrac n in ldL2 + rn * (1 + log (2 * pi * r * r / rn))
+  in
+    (d, ldL2, r, cholL)
+
+thetaLowerBounds :: Levels -> NL.Bounds
+thetaLowerBounds levels = NL.LowerBounds $ FL.fold fld levels
+ where
+  fld = FL.Fold
+    (\bs l ->
+      let e = effectsForLevel l
+      in  bs ++ L.replicate e 0 ++ replicate (e * (e - 1) `div` 2) (negate 1e10)
+    )
+    []
+    LA.fromList
+
+minimizeDeviance
+  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  => Int -- ^ p (cols of X)
+  -> Int -- ^ q (cols of Z)
+  -> Int -- ^ n (rows of X or Z)
+  -> Levels
+  -> SLA.SpMatrix a -- ^ A
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> LA.Vector a -- ^ initial guess for theta
+  -> P.Sem r (LA.Vector a, (a, a, a, LA.Matrix a))
+minimizeDeviance p q n levels smA mkST th0 = do
+  let pd x = profiledDeviance p q n smA mkST x
+      obj x = (\(d, _, _, _) -> d) $ pd x
+      stop      = NL.ObjectiveRelativeTolerance 1e-4 NL.:| []
+      thetaLB   = thetaLowerBounds levels
+      algorithm = NL.BOBYQA obj [thetaLB] Nothing
+      problem   = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
+  liftIO $ putStrLn "theta lower bounds="
+  liftIO $ print $ (\(NL.LowerBounds x) -> x) thetaLB
+  let eSol = NL.minimizeLocal problem th0
+  case eSol of
+    Left  result                       -> P.throw (T.pack $ show result)
+    Right (NL.Solution pdS thS result) -> do
+      liftIO
+        $  putStrLn
+        $  show "Solution ("
+        ++ show result
+        ++ ") reached! At th="
+      liftIO $ print thS
+      return $ (thS, pd thS)
+
+parametersFromSolution
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
+  => Int
+  -> Int
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ makeST
+  -> LA.Vector a -- ^ solution theta
+  -> LA.Matrix a -- ^ solution L
+  -> a -- ^ solution r
+  -> (LA.Vector a, LA.Vector a) -- ^ beta and b                       
+parametersFromSolution p q makeST th ldL r =
+  let v        = LA.fromList $ L.replicate (p + q) 0 ++ [r]
+      solution = LA.takesV [q, p] $ LA.flatten $ LA.triSolve LA.Upper
+                                                             (LA.tr ldL)
+                                                             (LA.asColumn v)
+      beta   = solution L.!! 1
+      bStar  = solution L.!! 0
+      (s, t) = makeST th
+      b      = ((asDense s) LA.<> (asDense t)) LA.#> bStar
+  in  (beta, b)
+

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e3b535b278187ad39105ac4106f176156385ca0f62694df6b9c3faaaba01ab31
+-- hash: 8355c6d8dea6591a4ce3f80c6080fc0212573b97cb86ccf37d571388f26505b5
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -40,7 +40,7 @@ library
       Paths_glm_haskell
   hs-source-dirs:
       src
-  ghc-options: -O -Wall -fplugin=Polysemy.Plugin
+  ghc-options: -O -Wall
   build-depends:
       base >=4.7 && <5
     , containers >=0.5.0.0 && <0.7
@@ -70,7 +70,7 @@ test-suite buildZ-test
       Paths_glm_haskell
   hs-source-dirs:
       test
-  ghc-options: -O -Wall -fplugin=Polysemy.Plugin
+  ghc-options: -O -Wall
   build-depends:
       Frames
     , base >=4.7 && <5
