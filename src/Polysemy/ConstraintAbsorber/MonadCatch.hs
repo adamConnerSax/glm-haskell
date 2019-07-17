@@ -12,10 +12,16 @@ module Polysemy.ConstraintAbsorber.MonadCatch
     -- * Constraint Absorbers
     absorbMonadThrow
   , absorbMonadCatch
+    -- * Re-exports
+  , Exception(..)
+  , SomeException
   )
 where
 
 import qualified Control.Monad.Catch           as C
+import           Control.Monad.Catch            ( Exception(..)
+                                                , SomeException
+                                                )
 import           Polysemy
 import           Polysemy.ConstraintAbsorber
 import qualified Polysemy.Error                as E

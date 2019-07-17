@@ -9,12 +9,17 @@ module Numeric.PIRLS where
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
+import           Polysemy.ConstraintAbsorber.MonadCatch
+                                                ( absorbMonadThrow
+                                                , SomeException
+                                                , Exception(..)
+                                                )
 import qualified GLM.Internal.Log              as Log
 import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
-import qualified Numeric.LinearAlgebra         as LA
+
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Numeric.LinearAlgebra.Class   as SLA
@@ -26,6 +31,10 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (-=-)
                                                 , (-||-)
                                                 )
+import qualified Numeric.LinearAlgebra         as LA
+
+
+
 import           Data.Either                    ( partitionEithers )
 import qualified Data.List                     as L
 import qualified Data.Sequence                 as Seq
@@ -59,9 +68,11 @@ type RowClassifier = Int -> VB.Vector Int
 -- in the vector.
 --type LevelEffectsSpec = [(Bool, Maybe (LA.Vector Bool))]
 
-type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
-runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
-runPIRLS_M = P.runM . P.runError
+type SemC r = (MonadIO (P.Sem r), P.Member (P.Error SomeException) r, P.Member (P.Error T.Text) r)
+runPIRLS_M
+  :: P.Sem '[P.Error SomeException, P.Error T.Text, P.Lift IO] a
+  -> IO (Either T.Text a)
+runPIRLS_M = P.runM . P.runError . P.runErrorAsAnother (T.pack . show)
 
 makeZ
   :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
@@ -132,6 +143,9 @@ makeZ mX levels rc = do
 -}
   return $ SLA.fromListSM (nO, q) zEntries
 
+asDense sp =
+  LA.matrix (snd $ SLA.dimSM sp) $ fmap (\(_, _, x) -> x) $ SLA.toDenseListSM sp
+
 toSparseMatrix
   :: (LA.Container LA.Vector a, RealFrac a) => LA.Matrix a -> SLA.SpMatrix a
 toSparseMatrix x
@@ -163,21 +177,21 @@ zTz is q x q, this is the part that will be sparse.
 -}
 makeA
   :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
-  => LA.Matrix a
-  -> LA.Vector a
-  -> SLA.SpMatrix a
+  => LA.Matrix a -- ^ X
+  -> LA.Vector a -- ^ y
+  -> SLA.SpMatrix a -- ^ Z 
   -> P.Sem r (SLA.SpMatrix a)
 makeA mX vY smZ = do
-  let (xRows, xCols) = LA.size mX
-      yRows          = LA.size vY
-      (zRows, zCols) = SLA.dim smZ
-  when (xRows /= zRows)
+  let (n, p)     = LA.size mX
+      yRows      = LA.size vY
+      (zRows, q) = SLA.dim smZ
+  when (zRows /= n)
     $  P.throw @T.Text
     $  (T.pack $ show xRows)
     <> " cols in X but "
     <> (T.pack $ show zRows)
     <> " cols in Z"
-  when (yRows /= xRows)
+  when (yRows /= n)
     $  P.throw @T.Text
     $  (T.pack $ show xRows)
     <> " cols in X but "
@@ -299,3 +313,29 @@ makeAStar' mX vY smZ mkST vTh = do
       c2     = (zsTx -=- xTx) -=- m_yTx
       c3     = (m_zsTy -=- m_xTy) -=- yTy
   return $ (c1 SLA.-||- c2) SLA.-||- c3
+
+-- since A* is (p + q + 1) x (p + q + 1) so is L
+profiledDeviance
+  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  => Int -- ^ p (cols of X)
+  -> Int -- ^ q (cols of Z)
+  -> Int -- ^ n (rows of X or Z)
+  -> SLA.SpMatrix a -- ^ A
+  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
+  -> LA.Vector a -- ^ theta
+  -> P.Sem r a
+profiledDeviance p q n smA mkST th = do
+  smAS  <- makeAStar p q smA mkST th
+  cholL <- absorbMonadThrow $ SLA.chol smAS -- this is likely slow.  TODO: cholmod
+  liftIO $ do
+    putStrLn "L="
+    LA.disp 2 $ asDense cholL
+  let
+    getDiag :: Int -> Double
+    getDiag n = cholL SLA.@@! (n, n)
+    r          = getDiag $ p + q
+    logZStZSpI = FL.fold (FL.premap getDiag FL.sum) [0 .. (q - 1)]
+    d =
+      let rn = realToFrac n
+      in  logZStZSpI + rn * (1 + log (2 * pi * r * r / rn))
+  return d

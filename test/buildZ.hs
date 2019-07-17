@@ -30,8 +30,7 @@ rows =
   L.take 20 $ L.iterate (\[x, y] -> [(x + 1) `mod` 10, y + 1 `mod` 5]) [1, 0]
 rowClassifier n = fmap VB.fromList rows !! n
 
-asDense sp =
-  LA.matrix (snd $ SLA.dimSM sp) $ fmap (\(_, _, x) -> x) $ SLA.toDenseListSM sp
+
 
 main :: IO ()
 main = do
@@ -62,6 +61,8 @@ main = do
     aStar' <- makeAStar' xM yV smZ makeST thV
     liftIO $ putStrLn "A*"
     liftIO $ LA.disp 2 $ asDense aStar'
+    pd <- profiledDeviance p q n smA makeST thV
+    liftIO $ putStrLn $ "profiled Deviance=" ++ (show pd)
     --  SLA.prd0 z
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
