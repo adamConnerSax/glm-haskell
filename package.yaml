@@ -41,7 +41,6 @@ flags:
 library:
   ghc-options: -O -Wall -fplugin=Polysemy.Plugin
   source-dirs: src
-
   when:
     - condition: flag(dump-core)
       dependencies:
@@ -57,3 +56,7 @@ tests:
     ghc-options: -O -Wall -fplugin=Polysemy.Plugin
     dependencies:
       - glm-haskell
+      - Frames
+      - mtl
+      - pipes
+      - vinyl

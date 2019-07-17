@@ -187,13 +187,13 @@ makeA mX vY smZ = do
       (zRows, q) = SLA.dim smZ
   when (zRows /= n)
     $  P.throw @T.Text
-    $  (T.pack $ show xRows)
+    $  (T.pack $ show n)
     <> " cols in X but "
     <> (T.pack $ show zRows)
     <> " cols in Z"
   when (yRows /= n)
     $  P.throw @T.Text
-    $  (T.pack $ show xRows)
+    $  (T.pack $ show n)
     <> " cols in X but "
     <> (T.pack $ show yRows)
     <> " entries in Y"
@@ -300,7 +300,10 @@ makeAStar' mX vY smZ mkST vTh = do
       svY    = toSparseVector vY
       (_, q) = SLA.dim smZ
       smZS   = smZ ## smT ## smS
-      zsTzs  = smZS #^# smZS
+  liftIO $ do
+    putStrLn "Z*="
+    LA.disp 2 $ asDense smZS
+  let zsTzs  = smZS #^# smZS
       zsTx   = smZS #^# smX
       xTzs   = smX #^# smZS
       xTx    = smX #^# smX
@@ -325,16 +328,23 @@ profiledDeviance
   -> LA.Vector a -- ^ theta
   -> P.Sem r a
 profiledDeviance p q n smA mkST th = do
-  smAS  <- makeAStar p q smA mkST th
-  cholL <- absorbMonadThrow $ SLA.chol smAS -- this is likely slow.  TODO: cholmod
+  smAS <- makeAStar p q smA mkST th
+--  cholL <- absorbMonadThrow $ SLA.chol smAS -- this is likely slow.  TODO: cholmod
+--  liftIO $ do
+--    putStrLn "L="
+--    LA.disp 2 $ asDense cholL
+  let cholL = LA.tr $ LA.chol $ LA.trustSym $ asDense smAS
   liftIO $ do
     putStrLn "L="
-    LA.disp 2 $ asDense cholL
+    LA.disp 2 $ cholL
+  let getDiag :: Int -> Double
+      getDiag n = cholL `LA.atIndex` (n, n)
+      r          = getDiag $ p + q
+      logZStZSpI = realToFrac 2
+        * FL.fold (FL.premap (log . getDiag) FL.sum) [0 .. (q - 1)]
+  liftIO $ putStrLn $ "r=" ++ show r
+  liftIO $ putStrLn $ "ldL2=" ++ show logZStZSpI
   let
-    getDiag :: Int -> Double
-    getDiag n = cholL SLA.@@! (n, n)
-    r          = getDiag $ p + q
-    logZStZSpI = FL.fold (FL.premap getDiag FL.sum) [0 .. (q - 1)]
     d =
       let rn = realToFrac n
       in  logZStZSpI + rn * (1 + log (2 * pi * r * r / rn))
