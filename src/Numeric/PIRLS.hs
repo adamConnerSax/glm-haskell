@@ -322,43 +322,53 @@ makeAStar' mX vY smZ mkST vTh = do
       c3     = (m_zsTy -=- m_xTy) -=- yTy
   return $ (c1 SLA.-||- c2) SLA.-||- c3
 
+data DevianceType = ML | REML deriving (Show, Eq)
+
 -- since A* is (p + q + 1) x (p + q + 1) so is L
 profiledDeviance
   :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
-  => Int -- ^ p (cols of X)
+  => DevianceType
+  -> Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z)
   -> Int -- ^ n (rows of X or Z)
   -> SLA.SpMatrix a -- ^ A
   -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
   -> LA.Vector a -- ^ theta
   -> (a, a, a, LA.Matrix a)
-profiledDeviance p q n smA mkST th =
-  let
-    smAS  = makeAStar p q smA mkST th
-    cholL = LA.tr $ LA.chol $ LA.trustSym $ asDense smAS
-    getDiag :: Int -> Double
-    getDiag n = cholL `LA.atIndex` (n, n)
-    r = getDiag $ p + q
-    ldL2 =
-      realToFrac 2 * FL.fold (FL.premap (log . getDiag) FL.sum) [0 .. (q - 1)]
-    d = let rn = realToFrac n in ldL2 + rn * (1 + log (2 * pi * r * r / rn))
-  in
-    (d, ldL2, r, cholL)
+profiledDeviance dt p q n smA mkST th
+  = let
+      smAS  = makeAStar p q smA mkST th
+      cholL = LA.tr $ LA.chol $ LA.trustSym $ asDense smAS
+      getDiag :: Int -> Double
+      getDiag n = cholL `LA.atIndex` (n, n)
+      r = getDiag $ p + q
+      logDiagF n = FL.fold (FL.premap (log . getDiag) FL.sum) [0 .. (n - 1)]
+      (dof, logDiag) = case dt of
+        ML   -> (n, logDiagF q)
+        REML -> (n - p, logDiagF (q + p))
+      ldL2 = realToFrac 2 * logDiag
+      d =
+        let rDOF = realToFrac dof
+        in  ldL2 + rDOF * (1 + log (2 * pi * r * r / rDOF))
+    in
+      (d, ldL2, r, cholL)
 
+-- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
 thetaLowerBounds :: Levels -> NL.Bounds
 thetaLowerBounds levels = NL.LowerBounds $ FL.fold fld levels
  where
   fld = FL.Fold
     (\bs l ->
       let e = effectsForLevel l
-      in  bs ++ L.replicate e 0 ++ replicate (e * (e - 1) `div` 2) (negate 1e10)
+      in  bs ++ L.replicate e 0 ++ replicate (e * (e - 1) `div` 2) (negate 1e5)
     )
     []
     LA.fromList
 
 minimizeDeviance
   :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
-  => Int -- ^ p (cols of X)
+  => DevianceType
+  -> Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z)
   -> Int -- ^ n (rows of X or Z)
   -> Levels
@@ -366,15 +376,27 @@ minimizeDeviance
   -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
   -> LA.Vector a -- ^ initial guess for theta
   -> P.Sem r (LA.Vector a, (a, a, a, LA.Matrix a))
-minimizeDeviance p q n levels smA mkST th0 = do
-  let pd x = profiledDeviance p q n smA mkST x
-      obj x = (\(d, _, _, _) -> d) $ pd x
-      stop      = NL.ObjectiveRelativeTolerance 1e-4 NL.:| []
-      thetaLB   = thetaLowerBounds levels
-      algorithm = NL.BOBYQA obj [thetaLB] Nothing
-      problem   = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
-  liftIO $ putStrLn "theta lower bounds="
-  liftIO $ print $ (\(NL.LowerBounds x) -> x) thetaLB
+minimizeDeviance dt p q n levels smA mkST th0 = do
+  let
+    pd x = profiledDeviance dt p q n smA mkST x
+    obj x = (\(d, _, _, _) -> d) $ pd x
+    stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| []
+    thetaLB        = thetaLowerBounds levels
+    algorithm      = NL.BOBYQA obj [thetaLB] Nothing
+    problem        = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
+    expThetaLength = FL.fold
+      (FL.premap
+        (\l -> let e = effectsForLevel l in e + (e * (e - 1) `div` 2))
+        FL.sum
+      )
+      levels
+  when (LA.size th0 /= expThetaLength)
+    $  P.throw
+    $  "guess for theta has "
+    <> (T.pack $ show $ LA.size th0)
+    <> " entries but should have "
+    <> (T.pack $ show expThetaLength)
+    <> "."
   let eSol = NL.minimizeLocal problem th0
   case eSol of
     Left  result                       -> P.throw (T.pack $ show result)
@@ -389,14 +411,15 @@ minimizeDeviance p q n levels smA mkST th0 = do
 
 parametersFromSolution
   :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
-  => Int
+  => DevianceType -- ^ unused for now??
+  -> Int
   -> Int
   -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ makeST
   -> LA.Vector a -- ^ solution theta
   -> LA.Matrix a -- ^ solution L
   -> a -- ^ solution r
-  -> (LA.Vector a, LA.Vector a) -- ^ beta and b                       
-parametersFromSolution p q makeST th ldL r =
+  -> (LA.Vector a, LA.Vector a, LA.Vector a) -- ^ beta, b and b* (also called u)                       
+parametersFromSolution dt p q makeST th ldL r =
   let v        = LA.fromList $ L.replicate (p + q) 0 ++ [r]
       solution = LA.takesV [q, p] $ LA.flatten $ LA.triSolve LA.Upper
                                                              (LA.tr ldL)
@@ -404,6 +427,51 @@ parametersFromSolution p q makeST th ldL r =
       beta   = solution L.!! 1
       bStar  = solution L.!! 0
       (s, t) = makeST th
-      b      = ((asDense s) LA.<> (asDense t)) LA.#> bStar
-  in  (beta, b)
+      b      = ((asDense t) LA.<> (asDense s)) LA.#> bStar
+  in  (beta, b, bStar)
 
+report
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
+  => Int -- ^ p
+  -> Int -- ^ q
+  -> Levels
+  -> LA.Vector a -- ^ y
+  -> LA.Matrix a -- ^ X
+  -> SLA.SpMatrix a -- ^ Z
+  -> LA.Vector a -- ^ beta
+  -> LA.Vector a -- ^ b
+  -> P.Sem r ()
+report p q levels vY mX smZ vBeta vb = do
+  let
+    mZ = asDense smZ
+    reportMean0 prefix v = do
+      let mean = meanV v
+          var  = (v LA.<.> v) / (realToFrac $ LA.size v)
+      putStrLn $ (T.unpack prefix) ++ ": mean (should be 0)=" ++ show mean
+      putStrLn
+        $  (T.unpack prefix)
+        ++ ": variance (assuming mean 0)="
+        ++ show var
+      putStrLn $ (T.unpack prefix) ++ ": std. dev (assuming mean 0)=" ++ show
+        (sqrt var)
+
+    vEps = vY - ((mX LA.#> vBeta) + (mZ LA.#> vb))
+    meanV v = LA.sumElements v / realToFrac (LA.size v)
+    mEps   = meanV vEps --LA.sumElements vEps / realToFrac (LA.size vEps)
+    varEps = vEps LA.<.> vEps -- assumes mEps is 0.  Which it should be!!                
+    levelReport l@(n, b, _) b' = do
+      putStrLn $ show n ++ " groups"
+      when b $ reportMean0 "Intercept" $ VS.take n b'
+      let (numSlopes, bS) = case b of
+            True  -> (effectsForLevel l - 1, VS.drop n b')
+            False -> (effectsForLevel l, b')
+      mapM_
+        (\s -> reportMean0 ("Slope " <> (T.pack $ show s))
+                           (VS.take n $ VS.drop (n * s) bS)
+        )
+        [0 .. (numSlopes - 1)]
+  liftIO $ reportMean0 "Residual" vEps
+  let numberedLevels = zip [0 ..] (VB.toList levels)
+  liftIO $ mapM_
+    (\(lN, l) -> putStrLn ("Level " ++ show lN) >> levelReport l vb)
+    numberedLevels
