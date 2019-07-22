@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 4436dd0c6e4e2ecb49e441cab2da6ee80b2c45313bfd351fa17b471f2474d7a8
+-- hash: 1fb3fb595ed38818e2743b7cb823b10b3a2967ab3e3d6c9fbda95c1114c7dde2
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -16,7 +16,7 @@ bug-reports:    https://github.com/adamConnerSax/glm-haskell/issues
 author:         Adam Conner-Sax
 maintainer:     adam_conner_sax@yahoo.com
 copyright:      2019 Adam Conner-Sax
-license:        BSD3
+license:        LGPL3
 build-type:     Simple
 extra-source-files:
     Readme.md
