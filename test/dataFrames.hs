@@ -22,10 +22,10 @@ import qualified Frames                        as F
 import qualified Frames.CSV                    as F
 import qualified Frames.InCore                 as FI
 import qualified Data.Vinyl                    as V
-import qualified Data.Vinyl.TypeLevel          as V
+--import qualified Data.Vinyl.TypeLevel          as V
 
 import qualified Numeric.LinearAlgebra         as LA
-import qualified Data.Sparse.SpMatrix          as SLA
+--import qualified Data.Sparse.SpMatrix          as SLA
 
 import qualified Data.Map                      as M
 import           Data.Maybe                     ( catMaybes )

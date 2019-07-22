@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeApplications    #-}
 module Main where
 
-import           Numeric.PIRLS
+import           Numeric.LinearMixedModel
 
 import           DataFrames
 import qualified Frames                        as F

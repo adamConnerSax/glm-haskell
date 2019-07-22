@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 8355c6d8dea6591a4ce3f80c6080fc0212573b97cb86ccf37d571388f26505b5
+-- hash: 4436dd0c6e4e2ecb49e441cab2da6ee80b2c45313bfd351fa17b471f2474d7a8
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -34,7 +34,10 @@ flag dump-core
 library
   exposed-modules:
       GLM.Internal.Log
-      Numeric.PIRLS
+      Numeric.GeneralizedMixedModel
+      Numeric.LinearAlgebra.CHOLMOD.CholmodExtra
+      Numeric.LinearMixedModel
+      Numeric.MixedModel
       Polysemy.ConstraintAbsorber.MonadCatch
   other-modules:
       Paths_glm_haskell
@@ -46,6 +49,7 @@ library
     , containers >=0.5.0.0 && <0.7
     , exceptions >=0.10.0 && <0.11
     , foldl >=1.4.0 && <=1.5
+    , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.20.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , nonlinear-optimization >=0.3.11 && <0.4
@@ -63,9 +67,9 @@ library
         dump-core
   default-language: Haskell2010
 
-test-suite buildZ-test
+test-suite LMM-test
   type: exitcode-stdio-1.0
-  main-is: buildZ.hs
+  main-is: LMM-test.hs
   other-modules:
       Paths_glm_haskell
   hs-source-dirs:
@@ -78,6 +82,7 @@ test-suite buildZ-test
     , exceptions >=0.10.0 && <0.11
     , foldl >=1.4.0 && <=1.5
     , glm-haskell
+    , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.20.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , mtl
