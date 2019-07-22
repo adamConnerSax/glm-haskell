@@ -1,7 +1,7 @@
 name:                glm-haskell
 version:             0.1.0.0
 github:              "adamConnerSax/glm-haskell"
-license:             LGPL3
+license:             LGPL-3
 author:              "Adam Conner-Sax"
 maintainer:          "adam_conner_sax@yahoo.com"
 copyright:           "2019 Adam Conner-Sax"
@@ -9,6 +9,8 @@ copyright:           "2019 Adam Conner-Sax"
 extra-source-files:
 - Readme.md
 - ChangeLog.md
+- src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.h
+- src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.c
 
 synopsis:            estimate generalized linear models
 category:            Numeric
@@ -40,6 +42,17 @@ flags:
     manual:      True
 
 library:
+  c-sources: src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.c
+  extra-libraries:
+    - cholmod
+    - amd
+    - colamd
+    - suitesparseconfig
+    - metis
+    - ccolamd
+    - camd
+    - lapack
+    - blas
   ghc-options: -O -Wall 
   source-dirs: src
   when:
@@ -53,7 +66,7 @@ library:
 tests:
   LMM-test:
     main: LMM-test.hs
-    source-dirs: test
+    source-dirs: test/glm
     ghc-options: -O -Wall 
     dependencies:
       - glm-haskell
@@ -61,3 +74,23 @@ tests:
       - mtl
       - pipes
       - vinyl
+
+  CHOLMOD-test:
+    extra-libraries:
+      - cholmod
+      - amd
+      - colamd
+      - suitesparseconfig
+      - metis
+      - ccolamd
+      - camd
+      - lapack
+      - blas
+    main: CHOLMOD-test.hs
+    source-dirs: test/CHOLMOD
+    ghc-options: -O -Wall
+    dependencies:
+      - glm-haskell
+      - hcholmod
+      - vector
+      

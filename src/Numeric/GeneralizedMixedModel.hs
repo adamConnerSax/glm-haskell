@@ -1,10 +1,12 @@
-{-# LANGUAGE TypeApplications    #-}
+
 {-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE Rank2Types          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 module Numeric.GeneralizedMixedModel
   ( module Numeric.GeneralizedMixedModel
   , module Numeric.MixedModel
@@ -48,11 +50,12 @@ import qualified Data.Vector.Storable          as VS
 
 
 data LinkFunctionType = IdentityLink | LogisticLink | PoissonLink deriving (Show, Eq)
-data LinkFunction a = LinkFunction { g :: RealFrac a => a -> a
-                                   , h :: RealFrac a => a -> a
-                                   , dhdx :: RealFrac a => a -> a -- useful in PIRLS algo
+data LinkFunction a = LinkFunction { g :: a -> a
+                                   , h :: a -> a
+                                   , dhdx :: a -> a -- useful in PIRLS algo
                                    }
 
+{-
 linkFunction :: RealFrac a => LinkFunctionType -> LinkFunction a
 linkFunction IdentityLink = LinkFunction id id (const 1)
 linkFunction LogisticLink = LinkFunction (\x -> log $ x / (1 - x))
@@ -60,9 +63,9 @@ linkFunction LogisticLink = LinkFunction (\x -> log $ x / (1 - x))
                                          (\x -> exp x / (1 + exp x) ^^ 2)
 linkFunction PoissonLink = LinkFunction log exp exp
 
+-}
 
-
-
+{-
 
 {-
 n rows
@@ -313,3 +316,4 @@ report p q levels vY mX smZ vBeta vb = do
   liftIO $ mapM_
     (\(lN, l) -> putStrLn ("Level " ++ show lN) >> levelReport l vb)
     numberedLevels
+-}

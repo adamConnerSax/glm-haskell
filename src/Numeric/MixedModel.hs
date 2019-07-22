@@ -217,7 +217,7 @@ makeSTF levels
               id
             (s, t, _, qT) = FL.fold fld makers
         in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
-
+{-
 zStarTzStarPlusOne
   :: (Num a, VS.Storable a)
   => (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
@@ -231,6 +231,7 @@ zStarTzStarPlusOne makeST z th =
   zStar  = z SLA.## s SLA.## t
   zStarT = SLA.transposeSM zStar
 
+
 lTheta ::  :: (Num a, VS.Storable a)
            => (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
            -> SLA.SpMatrix a -- ^ Z
@@ -238,3 +239,4 @@ lTheta ::  :: (Num a, VS.Storable a)
            -> SLA.SpMatrix a -- ^ lower triangular Cholesky factor
 lTheta makeST z th =
   LA.tr $ LA.chol $ LA.trustSym $ asDense zStarTzStarPlusOne makeSt z th
+-}

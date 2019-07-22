@@ -4,11 +4,16 @@
 #ifndef CHOLMOD_EXTRAS_H_
 #define CHOLMOD_EXTRAS_H_
 
-#include "cholmod_core.h" 
+#include "cholmod.h" 
 
 // void** addressOf(void* ptr);
+size_t cholmod_factor_n(cholmod_factor* a);
+size_t cholmod_factor_nzmax(cholmod_factor* a);
+
+
 int* cholmod_factor_permutation(cholmod_factor* a);
-cholmod_sparse*  cholmod_factor_sparse(cholmod_common* c, cholmod_factor* a);
+
+//cholmod_sparse*  cholmod_factor_sparse(cholmod_common* c, cholmod_factor* a);
 
 /*
 cholmod_common* cholmodx_allocate_common();

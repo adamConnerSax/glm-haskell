@@ -1,28 +1,26 @@
-/*
---------------------------------------------------------------------------------
---
---  Copyright (c) 2010 - 2013 Tad Doxsee
---  All rights reserved.
---
---  Author: Tad Doxsee
---
---------------------------------------------------------------------------------
-*/
 
-#include "cholmod_core.h"
+#include "cholmod.h"
 #include "cholmod_extras.h"
 
 // void** addressOf(void* ptr) {return &ptr;}
+
+size_t cholmod_factor_n(cholmod_factor* a)
+{
+  return a->n; 
+}
+
 
 int* cholmod_factor_permutation(cholmod_factor* a)
 {
   return (int*) a->Perm; 
 }
 
+/*
 cholmod_sparse*  cholmod_factor_sparse(cholmod_common* c, cholmod_factor* a)
 {
   return cholmod_factor_to_sparse(c,a);
 }
+*/
 /*
 cholmod_common* cholmodx_allocate_common()
 {

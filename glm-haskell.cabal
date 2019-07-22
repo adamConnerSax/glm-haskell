@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 1fb3fb595ed38818e2743b7cb823b10b3a2967ab3e3d6c9fbda95c1114c7dde2
+-- hash: 9a83ee5757f32241548933521450789d3259b95c21317a14852419549b9f9dcf
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -16,11 +16,13 @@ bug-reports:    https://github.com/adamConnerSax/glm-haskell/issues
 author:         Adam Conner-Sax
 maintainer:     adam_conner_sax@yahoo.com
 copyright:      2019 Adam Conner-Sax
-license:        LGPL3
+license:        LGPL-3
 build-type:     Simple
 extra-source-files:
     Readme.md
     ChangeLog.md
+    src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.h
+    src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.c
 
 source-repository head
   type: git
@@ -35,7 +37,7 @@ library
   exposed-modules:
       GLM.Internal.Log
       Numeric.GeneralizedMixedModel
-      Numeric.LinearAlgebra.CHOLMOD.CholmodExtra
+      Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
       Numeric.LinearMixedModel
       Numeric.MixedModel
       Polysemy.ConstraintAbsorber.MonadCatch
@@ -44,6 +46,18 @@ library
   hs-source-dirs:
       src
   ghc-options: -O -Wall
+  c-sources:
+      src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.c
+  extra-libraries:
+      cholmod
+      amd
+      colamd
+      suitesparseconfig
+      metis
+      ccolamd
+      camd
+      lapack
+      blas
   build-depends:
       base >=4.7 && <5
     , containers >=0.5.0.0 && <0.7
@@ -67,13 +81,52 @@ library
         dump-core
   default-language: Haskell2010
 
+test-suite CHOLMOD-test
+  type: exitcode-stdio-1.0
+  main-is: CHOLMOD-test.hs
+  other-modules:
+      Paths_glm_haskell
+  hs-source-dirs:
+      test/CHOLMOD
+  ghc-options: -O -Wall
+  extra-libraries:
+      cholmod
+      amd
+      colamd
+      suitesparseconfig
+      metis
+      ccolamd
+      camd
+      lapack
+      blas
+  build-depends:
+      base >=4.7 && <5
+    , containers >=0.5.0.0 && <0.7
+    , exceptions >=0.10.0 && <0.11
+    , foldl >=1.4.0 && <=1.5
+    , glm-haskell
+    , hcholmod
+    , hmatrix >=0.20.0 && <0.21
+    , hmatrix-nlopt >=0.1.2 && <0.2
+    , nonlinear-optimization >=0.3.11 && <0.4
+    , nonlinear-optimization-ad >=0.2 && <0.3
+    , polysemy >=0.7.0 && <0.8
+    , polysemy-plugin >=0.2.2 && <0.3
+    , polysemy-zoo >=0.3.0 && <0.5
+    , sparse-linear-algebra >=0.3 && <0.4
+    , statistics >=0.15.0 && <0.16
+    , text >=1.1.0.1 && <1.3
+    , vector
+  default-language: Haskell2010
+
 test-suite LMM-test
   type: exitcode-stdio-1.0
   main-is: LMM-test.hs
   other-modules:
+      DataFrames
       Paths_glm_haskell
   hs-source-dirs:
-      test
+      test/glm
   ghc-options: -O -Wall
   build-depends:
       Frames
