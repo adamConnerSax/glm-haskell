@@ -38,24 +38,31 @@ spMatrixToTriplet fpc smX = do
   CH.tripletSetNNZ triplet (fromIntegral nzMax)
   return triplet
 
-spMatrixAnalyze :: ForeignPtr CH.Common -> SLA.SpMatrix Double -> IO (ForeignPtr CH.Factor)
+-- | Compute fill-reducing permutation, etc. for a symmetric positive-definite matrix
+-- This only requires that the lower triangle be filled in
+spMatrixAnalyze :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                -> SLA.SpMatrix Double -- ^ matrix to analyze
+                -> IO (ForeignPtr CH.Factor, SLA.SpMatrix Double) -- ^ analysis and fill-reducing permutation
 spMatrixAnalyze fpc smX = do
   triplet <- spMatrixToTriplet fpc smX
   sparse <- CH.tripletToSparse triplet fpc
-  CH.analyze sparse fpc
-    
-spMatrixCholesky :: ForeignPtr CH.Common
-                 -> ForeignPtr CH.Factor
-                 -> SLA.SpMatrix Double
-                 -> IO (SLA.SpMatrix Double, SLA.SpMatrix Double)
-spMatrixCholesky fpc fpf smX = do
-  permSM <- factorPermutationSM fpf
-  triplet <- spMatrixToTriplet fpc smX 
-  sparse <- CH.tripletToSparse triplet fpc
+  f <- CH.analyze sparse fpc
+  permSM <- factorPermutationSM f
+  return (f, permSM)
   
+-- | compute the lower-triangular Cholesky factor using the given analysis stored in Factor
+-- the matrix given here must have the same pattern of non-zeroes as the one used for the
+-- analysis
+spMatrixCholesky :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                 -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
+                 -> SLA.SpMatrix Double -- ^ matrix to decompose
+                 -> IO (SLA.SpMatrix Double) -- ^ lower-triangular Cholesky factor
+spMatrixCholesky fpc fpf smX = do  
+  triplet <- spMatrixToTriplet fpc smX 
+  sparse <- CH.tripletToSparse triplet fpc  
   CH.factorize sparse fpf fpc
   choleskySM  <- choleskyFactorSM fpf fpc
-  return (permSM, choleskySM)
+  return choleskySM
   
              
 factorPermutation :: ForeignPtr CH.Factor -> IO (V.MVector s CInt)

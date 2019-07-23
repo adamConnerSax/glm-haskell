@@ -150,8 +150,8 @@ main = do
         ]
   putStrLn $ "mX="
   LA.disp 1 $ asDense mX
-  cholmodFactor     <- spMatrixAnalyze c mX
-  (cholPerm, cholL) <- spMatrixCholesky c cholmodFactor mX
+  (cholmodFactor, cholPerm) <- spMatrixAnalyze c mX
+  cholL                     <- spMatrixCholesky c cholmodFactor mX
 
   putStrLn $ "perm="
   LA.disp 0 $ asDense cholPerm
