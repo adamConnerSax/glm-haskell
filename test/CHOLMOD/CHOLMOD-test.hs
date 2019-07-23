@@ -18,6 +18,9 @@ import qualified Data.Vector.Storable          as V
 -- * hmatrix
 import qualified Numeric.LinearAlgebra         as LA
 
+-- * sparse-linear-algebra
+import qualified Data.Sparse.SpMatrix          as SLA
+
 -- * cholmod
 import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFaceLow
 import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace
@@ -84,22 +87,23 @@ main = do
   tripletSetNNZ at nnz
 
 
-  as    <- tripletToSparse at c :: IO (Matrix Sparse)
-  b     <- ones n 1 xtReal c :: IO (Matrix Dense)
-  l     <- analyze as c :: IO (ForeignPtr Factor)
+  as     <- tripletToSparse at c :: IO (Matrix Sparse)
+  b      <- ones n 1 xtReal c :: IO (Matrix Dense)
+  l      <- analyze as c :: IO (ForeignPtr Factor)
 
-  permM <- permutation l
-
+  permM  <- factorPermutation l
+  permSM <- factorPermutationSM l
   let permLength = V.length permM
   permV <- V.freeze permM
   putStrLn $ "perm length=" ++ show permLength
   putStrLn $ "perm=" ++ show permV
-
+  putStrLn $ "permSM="
+  LA.disp 1 $ asDense permSM
 
   factorize as l c
   choleskyL_SM <- choleskyFactorSM l c
   LA.disp 2 $ asDense choleskyL_SM
-
+  factorize as l c
   x     <- solve stA l b c :: IO (Matrix Dense)
 
   xNRow <- getNRow x
@@ -113,7 +117,6 @@ main = do
   xl <- readv xv
   mapM_ (putStrLn . show) xl
 
-
   r <- denseCopy b c
 
   let oneL = [1, 0] :: [CDouble]
@@ -125,15 +128,46 @@ main = do
 
   putStrLn $ "norm: " ++ show norm
 
+
+  putStrLn $ "Now via SpMatrix"
+  let mX = SLA.fromListSM
+        (5, 5)
+        [ (0, 0, 11)
+        , (1, 0, 21)
+        , (2, 0, 31)
+        , (3, 0, 41)
+        , (4, 0, 51)
+        , (1, 1, 22)
+        , (2, 1, 32)
+        , (3, 1, 42)
+        , (4, 1, 52)
+        , (2, 2, 33)
+        , (3, 2, 43)
+        , (4, 2, 53)
+        , (3, 3, 44)
+        , (4, 3, 54)
+        , (4, 4, 55)
+        ]
+  putStrLn $ "mX="
+  LA.disp 1 $ asDense mX
+  cholmodFactor     <- spMatrixAnalyze c mX
+  (cholPerm, cholL) <- spMatrixCholesky c cholmodFactor mX
+
+  putStrLn $ "perm="
+  LA.disp 0 $ asDense cholPerm
+
+  putStrLn $ "L="
+  LA.disp 2 $ asDense cholL
+
   putStrLn "done"
 
 
-
+{-
 writev :: (Storable a) => V.IOVector a -> [a] -> IO ()
-
 writev v xs =
   sequence_ [ V.write v i x | (i, x) <- zip [0 .. (Prelude.length xs - 1)] xs ]
 
 
---readv :: (Storable a) => V.IOVector a -> IO [a]
---readv v = sequence [ V.read v i | i <- [0 .. (V.length v) - 1] ]
+readv :: (Storable a) => V.IOVector a -> IO [a]
+readv v = sequence [ V.read v i | i <- [0 .. (V.length v) - 1] ]
+-}
