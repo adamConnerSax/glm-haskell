@@ -131,28 +131,8 @@ main = do
     when verbose $ liftIO $ do
       putStrLn "A*"
       LA.disp 2 $ asDense aStar
-    (th_ML, (pd_ML, ldL2_ML, r_ML, ldL_ML)) <- minimizeDeviance ML
-                                                                p
-                                                                q
-                                                                n
-                                                                levels
-                                                                smA
-                                                                makeST
-                                                                th0
-    liftIO $ putStrLn $ "ML Solution: profiled Deviance=" ++ (show pd_ML)
-    liftIO $ putStrLn $ "ML Solution: r=" ++ show r_ML
-    liftIO $ putStrLn $ "ML Solution: ldL2=" ++ show ldL2_ML
-    when verbose $ liftIO $ LA.disp 2 ldL_ML
-    let (beta_ML, b_ML, bS_ML) =
-          parametersFromSolution ML p q makeST th_ML ldL_ML r_ML
-    liftIO $ do
-      putStrLn $ "ML Fixed  (beta) =" ++ show beta_ML
-      putStrLn $ "ML Random (th) =" ++ show th_ML
-      putStrLn $ "ML Random (u, AKA b*) =" ++ show bS_ML
-      putStrLn $ "ML Random (b) =" ++ show b_ML
-    report p q levels vY mX smZ beta_ML b_ML
-    (th_REML, (pd_REML, ldL2_REML, r_REML, ldL_REML)) <- minimizeDeviance
-      REML
+    (th_ML, perm_ML, (pd_ML, ldL2_ML, r_ML, ldL_ML)) <- minimizeDeviance
+      ML
       p
       q
       n
@@ -160,17 +140,50 @@ main = do
       smA
       makeST
       th0
+    liftIO $ putStrLn $ "ML Solution: profiled Deviance=" ++ (show pd_ML)
+    liftIO $ putStrLn $ "ML Solution: r=" ++ show r_ML
+    liftIO $ putStrLn $ "ML Solution: ldL2=" ++ show ldL2_ML
+    when verbose $ liftIO $ do
+      putStrLn "perm="
+      LA.disp 0 $ asDense perm_ML
+      putStrLn "L="
+      LA.disp 2 $ asDense $ ldL_ML
+    (beta_ML, b_ML, bS_ML) <- parametersFromSolution ML
+                                                     p
+                                                     q
+                                                     makeST
+                                                     th_ML
+                                                     (perm_ML, ldL_ML)
+                                                     r_ML
+    liftIO $ do
+      putStrLn $ "ML Fixed  (beta) =" ++ show (asDenseV beta_ML)
+      putStrLn $ "ML Random (th) =" ++ show th_ML
+      putStrLn $ "ML Random (u, AKA b*) =" ++ show (asDenseV bS_ML)
+      putStrLn $ "ML Random (b) =" ++ show (asDenseV b_ML)
+    report p q levels vY mX smZ beta_ML b_ML
+    (th_REML, perm_REML, (pd_REML, ldL2_REML, r_REML, ldL_REML)) <-
+      minimizeDeviance REML p q n levels smA makeST th0
     liftIO $ putStrLn $ "REML Solution: profiled Deviance=" ++ (show pd_REML)
     liftIO $ putStrLn $ "REML Solution: r=" ++ show r_REML
     liftIO $ putStrLn $ "REML Solution: ldL2=" ++ show ldL2_REML
-    when verbose $ liftIO $ LA.disp 2 ldL_REML
-    let (beta_REML, b_REML, bS_REML) =
-          parametersFromSolution REML p q makeST th_REML ldL_REML r_REML
+    when verbose $ liftIO $ do
+      putStrLn "perm="
+      LA.disp 0 $ asDense perm_REML
+      putStrLn "L="
+      LA.disp 2 $ asDense $ ldL_REML
+    (beta_REML, b_REML, bS_REML) <- parametersFromSolution
+      REML
+      p
+      q
+      makeST
+      th_REML
+      (perm_REML, ldL_REML)
+      r_REML
     liftIO $ do
-      putStrLn $ "REML Fixed  (beta) =" ++ show beta_REML
+      putStrLn $ "REML Fixed  (beta) =" ++ show (asDenseV beta_REML)
       putStrLn $ "REML Random (th) =" ++ show th_REML
-      putStrLn $ "ML Random (u, AKA b*) =" ++ show bS_REML
-      putStrLn $ "REML Random (b) =" ++ show b_REML
+      putStrLn $ "ML Random (u, AKA b*) =" ++ show (asDenseV bS_REML)
+      putStrLn $ "REML Random (b) =" ++ show (asDenseV b_REML)
     report p q levels vY mX smZ beta_REML b_REML
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)

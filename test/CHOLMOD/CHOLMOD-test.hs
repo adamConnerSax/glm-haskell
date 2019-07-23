@@ -17,10 +17,11 @@ import qualified Data.Vector.Storable          as V
 
 -- * hmatrix
 import qualified Numeric.LinearAlgebra         as LA
+import qualified Numeric.LinearAlgebra.HMatrix as LA
 
 -- * sparse-linear-algebra
 import qualified Data.Sparse.SpMatrix          as SLA
-
+import qualified Numeric.LinearAlgebra.Sparse  as SLA
 -- * cholmod
 import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFaceLow
 import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace
@@ -148,17 +149,41 @@ main = do
         , (4, 3, 54)
         , (4, 4, 55)
         ]
+  let mX' = SLA.fromListSM
+        (5, 5)
+        [ (0, 0, 11)
+        , (1, 0, 121)
+        , (2, 0, 31)
+        , (3, 0, 41)
+        , (4, 0, 51)
+        , (1, 1, 122)
+        , (2, 1, 32)
+        , (3, 1, 42)
+        , (4, 1, 52)
+        , (2, 2, 33)
+        , (3, 2, 43)
+        , (4, 2, 53)
+        , (3, 3, 44)
+        , (4, 3, 54)
+        , (4, 4, 55)
+        ]
   putStrLn $ "mX="
   LA.disp 1 $ asDense mX
   (cholmodFactor, cholPerm) <- spMatrixAnalyze c mX
-  cholL                     <- spMatrixCholesky c cholmodFactor mX
-
+  let cholL_CM  = unsafeSpMatrixCholesky c cholmodFactor mX
+      cholL'_CM = unsafeSpMatrixCholesky c cholmodFactor mX'
+--      cholL_HM  = LA.tr $ LA.chol $ LA.trustSym $ LA.tr $ asDense mX
+--      cholL'_HM = LA.tr $ LA.chol $ LA.trustSym $ LA.tr $ asDense mX'
   putStrLn $ "perm="
   LA.disp 0 $ asDense cholPerm
 
-  putStrLn $ "L="
-  LA.disp 2 $ asDense cholL
+  putStrLn $ "L (CHOLMOD)="
+  LA.disp 2 $ asDense cholL_CM
+  putStrLn $ "LLt="
+  LA.disp 2 $ asDense (cholL_CM SLA.## (SLA.transposeSM cholL_CM))
 
+  putStrLn $ "L' (CHOLMOD)="
+  LA.disp 2 $ asDense cholL'_CM
   putStrLn "done"
 
 

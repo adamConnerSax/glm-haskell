@@ -12,6 +12,8 @@ module Numeric.LinearMixedModel
 where
 
 import           Numeric.MixedModel
+import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
+                                               as CH
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
@@ -22,6 +24,7 @@ import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 
 import qualified Data.Sparse.SpMatrix          as SLA
+import qualified Data.Sparse.SpVector          as SLA
 --import qualified Data.Sparse.SpVector          as SLA
 import qualified Numeric.LinearAlgebra.Class   as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
@@ -146,22 +149,24 @@ data DevianceType = ML | REML deriving (Show, Eq)
 -- since A* is (p + q + 1) x (p + q + 1) so is L
 profiledDeviance
   :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
-  => DevianceType
+  => CH.ForeignPtr CH.Common
+  -> DevianceType
   -> Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z)
   -> Int -- ^ n (rows of X or Z)
   -> SLA.SpMatrix a -- ^ A
+  -> CH.ForeignPtr CH.Factor
   -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
   -> LA.Vector a -- ^ theta
-  -> (a, a, a, LA.Matrix a)
-profiledDeviance dt p q n smA mkST th
+  -> (a, a, a, SLA.SpMatrix a)
+profiledDeviance cholmodC dt p q n smA cholmodF mkST th
   = let
       smAS  = makeAStar p q smA mkST th
-      cholL = LA.tr $ LA.chol $ LA.trustSym $ asDense smAS
-      getDiag :: Int -> Double
-      getDiag n = cholL `LA.atIndex` (n, n)
-      r = getDiag $ p + q
-      logDiagF n = FL.fold (FL.premap (log . getDiag) FL.sum) [0 .. (n - 1)]
+      cholL = CH.unsafeSpMatrixCholesky cholmodC cholmodF smAS -- yikes!
+      --diagL = SLA.extractDiag cholL
+      getDiagX n = SLA.lookupWD_SM cholL (n, n)
+      r = getDiagX $ q + p
+      logDiagF n = FL.fold (FL.premap (log . getDiagX) FL.sum) [0 .. (n - 1)]
       (dof, logDiag) = case dt of
         ML   -> (n, logDiagF q)
         REML -> (n - p, logDiagF (q + p))
@@ -194,10 +199,18 @@ minimizeDeviance
   -> SLA.SpMatrix a -- ^ A
   -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
   -> LA.Vector a -- ^ initial guess for theta
-  -> P.Sem r (LA.Vector a, (a, a, a, LA.Matrix a))
+  -> P.Sem
+       r
+       ( LA.Vector a
+       , SLA.SpMatrix a
+       , (a, a, a, SLA.SpMatrix a)
+       )
 minimizeDeviance dt p q n levels smA mkST th0 = do
+  cholmodC <- liftIO CH.allocCommon
+  liftIO $ CH.startC cholmodC
+  (cholmodF, permSM) <- liftIO $ CH.spMatrixAnalyze cholmodC smA
   let
-    pd x = profiledDeviance dt p q n smA mkST x
+    pd x = profiledDeviance cholmodC dt p q n smA cholmodF mkST x
     obj x = (\(d, _, _, _) -> d) $ pd x
     stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| []
     thetaLB        = thetaLowerBounds levels
@@ -226,43 +239,45 @@ minimizeDeviance dt p q n levels smA mkST th0 = do
         ++ show result
         ++ ") reached! At th="
       liftIO $ print thS
-      return $ (thS, pd thS)
+      return $ (thS, permSM, pd thS)
 
 parametersFromSolution
-  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
   => DevianceType -- ^ unused for now??
   -> Int
   -> Int
   -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ makeST
   -> LA.Vector a -- ^ solution theta
-  -> LA.Matrix a -- ^ solution L
+  -> (SLA.SpMatrix a, SLA.SpMatrix a) -- ^ solution (P,L)
   -> a -- ^ solution r
-  -> (LA.Vector a, LA.Vector a, LA.Vector a) -- ^ beta, b and b* (also called u)                       
-parametersFromSolution dt p q makeST th ldL r =
-  let v        = LA.fromList $ L.replicate (p + q) 0 ++ [r]
-      solution = LA.takesV [q, p] $ LA.flatten $ LA.triSolve LA.Upper
-                                                             (LA.tr ldL)
-                                                             (LA.asColumn v)
-      beta   = solution L.!! 1
-      bStar  = solution L.!! 0
+  -> P.Sem
+       r
+       (SLA.SpVector a, SLA.SpVector a, SLA.SpVector a) -- ^ beta, b and b* (also called u)                       
+parametersFromSolution dt p q makeST th (permSM, ldL) r = do
+  let sv :: SLA.SpVector Double =
+        SLA.fromListDenseSV (p + q + 1) $ L.replicate (p + q) 0 ++ [r]
+  solV <- liftIO $ SLA.triUpperSolve (SLA.transposeSM ldL SLA.## permSM) sv
+  let bStar  = SLA.takeSV q $ solV
+      beta   = SLA.takeSV p $ SLA.dropSV q $ solV
       (s, t) = makeST th
-      b      = ((asDense t) LA.<> (asDense s)) LA.#> bStar
-  in  (beta, b, bStar)
+      b      = (t SLA.## s) SLA.#> bStar
+  return (beta, b, bStar)
 
 report
-  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
+  :: (LA.Container LA.Vector Double, SemC r)
   => Int -- ^ p
   -> Int -- ^ q
   -> Levels
-  -> LA.Vector a -- ^ y
-  -> LA.Matrix a -- ^ X
-  -> SLA.SpMatrix a -- ^ Z
-  -> LA.Vector a -- ^ beta
-  -> LA.Vector a -- ^ b
+  -> LA.Vector Double -- ^ y
+  -> LA.Matrix Double -- ^ X
+  -> SLA.SpMatrix Double -- ^ Z
+  -> SLA.SpVector Double -- ^ beta
+  -> SLA.SpVector Double -- ^ b
   -> P.Sem r ()
-report p q levels vY mX smZ vBeta vb = do
+report p q levels vY mX smZ svBeta svb = do
   let
-    mZ = asDense smZ
+    vBeta = asDenseV svBeta
+    vb    = asDenseV svb
     reportMean0 prefix v = do
       let mean = meanV v
           var  = (v LA.<.> v) / (realToFrac $ LA.size v)
@@ -273,8 +288,7 @@ report p q levels vY mX smZ vBeta vb = do
         ++ show var
       putStrLn $ (T.unpack prefix) ++ ": std. dev (assuming mean 0)=" ++ show
         (sqrt var)
-
-    vEps = vY - ((mX LA.#> vBeta) + (mZ LA.#> vb))
+    vEps = vY - ((mX LA.#> vBeta) + asDenseV (smZ SLA.#> svb))
     meanV v = LA.sumElements v / realToFrac (LA.size v)
     mEps   = meanV vEps --LA.sumElements vEps / realToFrac (LA.size vEps)
     varEps = vEps LA.<.> vEps -- assumes mEps is 0.  Which it should be!!                

@@ -2,16 +2,37 @@
 {-# LANGUAGE ForeignFunctionInterface #-} 
 {-# LANGUAGE EmptyDataDecls           #-}
 
-module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras where
+module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
+  (
+    spMatrixAnalyze
+  , spMatrixCholesky
+  , unsafeSpMatrixCholesky
+  , factorPermutation
+  , factorPermutationSM
+  , choleskyFactorSM
+  , readv
+  , writev
+  -- * re-exports
+  , Factor
+  , Common
+  , ForeignPtr
+  , allocCommon
+  , startC
+  )
+where
 
 import Foreign hiding (free)
 import Foreign.C.Types
 import Foreign.Storable (peek)
+import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Data.Sparse.SpMatrix          as SLA
+import qualified Numeric.LinearAlgebra.Sparse          as SLA
 
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodXFaceLow as CH
+import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFaceLow  (Common, Factor)
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodXFace as CH
+import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace  (allocCommon, startC)
 
 import qualified Data.Vector.Storable.Mutable as V
 
@@ -61,14 +82,23 @@ spMatrixCholesky fpc fpf smX = do
   triplet <- spMatrixToTriplet fpc smX 
   sparse <- CH.tripletToSparse triplet fpc  
   CH.factorize sparse fpf fpc
-  choleskySM  <- choleskyFactorSM fpf fpc
-  return choleskySM
+  choleskyFactorSM fpf fpc
+
+-- |  compute the lower-triangular Cholesky factor using the given analysis stored in Factor
+-- the matrix given here must have the same pattern of non-zeroes as the one used for the
+-- analysis
+-- NB: THis version calls unsafePerformIO which, I think, is okay because the function is referentially transparent.
+-- At least in a single threaded environment. Oy.
+unsafeSpMatrixCholesky ::  ForeignPtr CH.Common -- ^ CHOLMOD environment
+                       -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
+                       -> SLA.SpMatrix Double -- ^ matrix to decompose
+                       -> SLA.SpMatrix Double -- ^ lower-triangular Cholesky factor
+unsafeSpMatrixCholesky fpc fpf smX = unsafePerformIO $ spMatrixCholesky fpc fpf smX
+{-# NOINLINE unsafeSpMatrixCholesky #-} 
   
-             
 factorPermutation :: ForeignPtr CH.Factor -> IO (V.MVector s CInt)
 factorPermutation ffp = withForeignPtr ffp $ \fp -> do
   n <- factorN_L fp :: IO CSize
-  putStrLn $ "n=" ++ show n
   pi <- factorPermutationL fp :: IO (Ptr CInt)
   pifp <- newForeignPtr_ pi :: IO (ForeignPtr CInt)
   return $ V.unsafeFromForeignPtr0 pifp (fromIntegral n)
@@ -85,6 +115,7 @@ factorPermutationSM ffp = do
 choleskyFactorSM :: ForeignPtr CH.Factor -> ForeignPtr CH.Common -> IO (SLA.SpMatrix Double)
 choleskyFactorSM ffp cfp = withForeignPtr ffp $ \fp -> do
   withForeignPtr cfp $ \cp -> do
+    changeFactorL (fromIntegral $ CH.unXType CH.xtReal) 1 1 0 1 fp cp
     pSparse <- factorToSparseL fp cp :: IO (Ptr CH.Sparse)
     pTriplet <- sparseToTripletL pSparse cp :: IO (Ptr CH.Triplet)
     nRows <- CH.triplet_get_nrow pTriplet
@@ -100,7 +131,9 @@ choleskyFactorSM ffp cfp = withForeignPtr ffp $ \fp -> do
     colIndices <- readv (V.unsafeFromForeignPtr0 colIndicesFP (fromIntegral nZmax))
     vals <- readv (V.unsafeFromForeignPtr0 valsFP (fromIntegral nZmax))
     let triplets = zip3 (fmap fromIntegral rowIndices) (fmap fromIntegral colIndices) (fmap realToFrac vals)
-    return $ SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
+        sm = SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
+    SLA.prd sm    
+    return sm
 
 
 readv :: V.Storable a => V.IOVector a -> IO [a]

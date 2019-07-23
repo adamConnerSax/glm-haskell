@@ -131,6 +131,10 @@ makeZ mX levels rc =
 asDense sp =
   LA.matrix (snd $ SLA.dimSM sp) $ fmap (\(_, _, x) -> x) $ SLA.toDenseListSM sp
 
+asDenseV :: SLA.SpVector Double -> LA.Vector Double
+asDenseV = VS.convert . SLA.toVectorDense
+
+
 toSparseMatrix
   :: (LA.Container LA.Vector a, RealFrac a) => LA.Matrix a -> SLA.SpMatrix a
 toSparseMatrix x
