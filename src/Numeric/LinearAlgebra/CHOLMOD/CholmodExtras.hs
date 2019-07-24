@@ -5,12 +5,19 @@
 
 module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   (
-    spMatrixAnalyze
+    MatrixSymmetry (..)
+  , SolveSystem (..)
+  , solveSparse
+  , spMatrixAnalyze
   , spMatrixCholesky
   , unsafeSpMatrixCholesky
+  , spMatrixFactorize
+  , unsafeSpMatrixFactorize
   , factorPermutation
   , factorPermutationSM
+  , unsafeFactorPermutationSM
   , choleskyFactorSM
+  , unsafeCholeskyFactorSM
   , spMatrixToTriplet
   , tripletToSpMatrix
   , readv
@@ -20,7 +27,6 @@ module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   , printFactor
   , printTriplet
   , printSparse
-  , setFinalLL
   -- * re-exports
   , Factor
   , Common
@@ -36,6 +42,7 @@ import Foreign.C.String
 import Foreign.Storable (peek)
 import System.IO.Unsafe (unsafePerformIO)
 
+import           Control.Monad (when)
 import qualified Data.Text as T
 
 import qualified Data.Sparse.SpMatrix          as SLA
@@ -48,42 +55,108 @@ import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace  (allocCommon, start
 
 import qualified Data.Vector.Storable.Mutable as V
 
--- | make an SpMatrix into a CHOLMOD triplet
--- assumes the SpMatrix is square and symmetric and only uses lower triangle
-spMatrixToTriplet :: RealFrac a => ForeignPtr CH.Common -> SLA.SpMatrix a -> IO (CH.Matrix CH.Triplet)
-spMatrixToTriplet fpc smX = do
+data MatrixSymmetry = UnSymmetric | SquareSymmetricUpper | SquareSymmetricLower
+
+data SolveSystem =
+  CHOLMOD_A      -- Ax    = b
+  | CHOLMOD_LDLt -- LDL'x = b 
+  | CHOLMOD_LD   -- LDx   = b
+  | CHOLMOD_DLt  -- DL'x  = b
+  | CHOLMOD_L    -- Lx    = b
+  | CHOLMOD_Lt   -- L'x   = b
+  | CHOLMOD_D    -- Dx    = b
+  | CHOLMOD_P    -- x     = Pb
+  | CHOLMOD_Pt   -- x     = P'b
+    deriving (Enum, Show, Eq)
+
+cholmodSystem :: SolveSystem -> CInt
+cholmodSystem CHOLMOD_A = 0
+cholmodSystem CHOLMOD_LDLt = 1
+cholmodSystem CHOLMOD_LD = 2
+cholmodSystem CHOLMOD_DLt = 3
+cholmodSystem CHOLMOD_L = 4
+cholmodSystem CHOLMOD_Lt = 5
+cholmodSystem CHOLMOD_D = 6
+cholmodSystem CHOLMOD_P = 7
+cholmodSystem CHOLMOD_Pt = 8
+
+hcholmodSType :: MatrixSymmetry -> CH.SType
+hcholmodSType UnSymmetric = CH.stUnsymmetric
+hcholmodSType SquareSymmetricUpper = CH.stSquareSymmetricUpper
+hcholmodSType SquareSymmetricLower = CH.stSquareSymmetricLower
+
+debug = False
+
+solveSparse :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+            -> ForeignPtr CH.Factor -- ^ contains P and LL' (or LDL')  
+            -> SolveSystem -- ^ which system to solve
+            -> SLA.SpMatrix Double -- ^ RHS
+            -> IO (SLA.SpMatrix Double) -- ^ solutions
+solveSparse fpc fpf ss smB = do
+  mTripletB <- spMatrixToTriplet fpc UnSymmetric smB
+  mSparseB <- CH.tripletToSparse mTripletB fpc
+  withForeignPtr fpc $ \pc -> do
+    withForeignPtr fpf $ \pf -> do
+      withForeignPtr (CH.fPtr mSparseB) $ \pSparseB -> do
+        pSparseX <- sparseSolveL (cholmodSystem ss) pf pSparseB pc
+        CH.sparse_free pSparseB pc
+        withForeignPtr (CH.fPtr mTripletB) $ \pt -> CH.triplet_free pt pc       
+        pTripletX <- sparseToTripletL pSparseX pc
+        smX <- tripletToSpMatrix pTripletX
+        CH.triplet_free pTripletX pc
+        CH.sparse_free pSparseX pc
+        return smX
+        
+getDims :: MatrixSymmetry ->  SLA.SpMatrix a -> (CSize, CSize, CSize)
+getDims ms smX =
   let (nrows, ncols) = SLA.dimSM smX
       nzMax = SLA.nzSM smX
+      nnz = case ms of
+        UnSymmetric -> nzMax
+        _ -> min nzMax (nrows * (nrows + 1) `div` 2)
+  in (fromIntegral nrows, fromIntegral ncols, fromIntegral nnz)
+    
+-- | make an SpMatrix into a CHOLMOD triplet
+-- this thing should, but doesn't, free itself via ForeignPtr.
+spMatrixToTriplet :: RealFrac a => ForeignPtr CH.Common -> MatrixSymmetry -> SLA.SpMatrix a -> IO (CH.Matrix CH.Triplet)
+spMatrixToTriplet fpc ms smX = do
+  let (nrows, ncols, nnz) = getDims ms smX
   triplet <- CH.allocTriplet
-             (fromIntegral nrows)
-             (fromIntegral ncols)
-             (fromIntegral nzMax)
-             CH.stUnsymmetric
+             nrows
+             ncols
+             nnz
+             (hcholmodSType ms)
              CH.xtReal
              fpc
   rowIs <- CH.tripletGetRowIndices triplet
   colIs <- CH.tripletGetColIndices triplet
   vals  <- CH.tripletGetX triplet
-  let smTriplets = SLA.toListSM smX
+  let symmetryFilter (r,c,_) = case ms of
+        UnSymmetric -> True
+        SquareSymmetricUpper -> (c >= r)
+        SquareSymmetricLower -> (c <= r)
+      smTriplets = filter symmetryFilter $ SLA.toListSM smX
   writev rowIs $ fmap (\(rI,_,_) -> fromIntegral rI) smTriplets
   writev colIs $ fmap (\(_,cI,_) -> fromIntegral cI) smTriplets
   writev vals $ fmap (\(_,_,x) -> realToFrac x) smTriplets
-  CH.tripletSetNNZ triplet (fromIntegral nzMax)
+  CH.tripletSetNNZ triplet (fromIntegral $ length smTriplets)
   return triplet
 
 -- | Compute fill-reducing permutation, etc. for a symmetric positive-definite matrix
 -- This only requires that the lower triangle be filled in
 spMatrixAnalyze :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                -> MatrixSymmetry
                 -> SLA.SpMatrix Double -- ^ matrix to analyze
                 -> IO (ForeignPtr CH.Factor, SLA.SpMatrix Double) -- ^ analysis and fill-reducing permutation
-spMatrixAnalyze fpc smX = do
---  withForeignPtr fpc $ \cp -> setFinalLL 1 cp
-  triplet <- spMatrixToTriplet fpc smX
-  printTriplet (CH.fPtr triplet) "spMatrixAnalyze" fpc
+spMatrixAnalyze fpc ms smX = do
+  triplet <- spMatrixToTriplet fpc ms smX
+  when debug $ printTriplet (CH.fPtr triplet) "spMatrixAnalyze" fpc
   sparse <- CH.tripletToSparse triplet fpc
   f <- CH.analyze sparse fpc
-  printFactor f "spMatrixAnalyze" fpc
+  when debug $ printFactor f "spMatrixAnalyze" fpc
   permSM <- factorPermutationSM f
+  withForeignPtr fpc $ \pc -> do
+    withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc    
   return (f, permSM)
   
 -- | compute the lower-triangular Cholesky factor using the given analysis stored in Factor
@@ -91,28 +164,58 @@ spMatrixAnalyze fpc smX = do
 -- analysis
 spMatrixCholesky :: ForeignPtr CH.Common -- ^ CHOLMOD environment
                  -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
+                 -> MatrixSymmetry
                  -> SLA.SpMatrix Double -- ^ matrix to decompose
                  -> IO (SLA.SpMatrix Double) -- ^ lower-triangular Cholesky factor
-spMatrixCholesky fpc fpf smX = do  
-  triplet <- spMatrixToTriplet fpc smX
-  printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
-  sparse <- CH.tripletToSparse triplet fpc
-  printSparse (CH.fPtr sparse) "spMatrixCholesky" fpc
-  CH.factorize sparse fpf fpc
-  printFactor fpf "spMatrixCholesky (after factorize):" fpc
+spMatrixCholesky fpc fpf ms smX = do
+  spMatrixFactorize fpc fpf ms smX
   choleskyFactorSM fpf fpc
 
+spMatrixFactorize :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                  -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
+                  -> MatrixSymmetry
+                  -> SLA.SpMatrix Double -- ^ matrix to decompose
+                  -> IO () -- ^ The factor in ForeignPtr Factor will be updated :(
+spMatrixFactorize fpc fpf ms smX = do
+  triplet <- spMatrixToTriplet fpc ms smX
+  when debug $ printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
+  sparse <- CH.tripletToSparse triplet fpc
+  when debug $ printSparse (CH.fPtr sparse) "spMatrixCholesky" fpc
+  CH.factorize sparse fpf fpc
+  withForeignPtr fpc $ \pc -> do
+    withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc
+    withForeignPtr (CH.fPtr sparse) $ \ps -> CH.sparse_free ps pc
+  return ()
+  
 -- |  compute the lower-triangular Cholesky factor using the given analysis stored in Factor
 -- the matrix given here must have the same pattern of non-zeroes as the one used for the
 -- analysis
 -- NB: THis version calls unsafePerformIO which, I think, is okay because the function is referentially transparent.
 -- At least in a single threaded environment. Oy.
+-- TODO: But I am not sure all the allocation and freeing is really correct.
 unsafeSpMatrixCholesky ::  ForeignPtr CH.Common -- ^ CHOLMOD environment
                        -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
-                       -> SLA.SpMatrix Double -- ^ matrix to decompose
+                       -> MatrixSymmetry
+                       -> SLA.SpMatrix Double -- ^ matrix to decompose                       
                        -> SLA.SpMatrix Double -- ^ lower-triangular Cholesky factor
-unsafeSpMatrixCholesky fpc fpf smX = unsafePerformIO $ spMatrixCholesky fpc fpf smX
+unsafeSpMatrixCholesky fpc fpf ms smX = unsafePerformIO $ spMatrixCholesky fpc fpf ms smX
 {-# NOINLINE unsafeSpMatrixCholesky #-} 
+
+unsafeSpMatrixFactorize ::  ForeignPtr CH.Common -- ^ CHOLMOD environment
+                        -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
+                        -> MatrixSymmetry
+                        -> SLA.SpMatrix Double -- ^ matrix to decompose
+                        -> () -- ^ The factor in ForeignPtr Factor will be updated :(
+unsafeSpMatrixFactorize fpc fpf sm smX = unsafePerformIO $ spMatrixFactorize fpc fpf sm smX
+{-# NOINLINE unsafeSpMatrixFactorize #-}
+
+unsafeSolveSparse :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                  -> ForeignPtr CH.Factor -- ^ contains P and LL' (or LDL')  
+                  -> SolveSystem -- ^ which system to solve
+                  -> SLA.SpMatrix Double -- ^ RHS
+                  -> SLA.SpMatrix Double -- ^ solutions
+unsafeSolveSparse fpc fpf ss smB = unsafePerformIO $ solveSparse fpc fpf ss smB
+{-# NOINLINE unsafeSolveSparse #-}
   
 factorPermutation :: ForeignPtr CH.Factor -> IO (V.MVector s CInt)
 factorPermutation ffp = withForeignPtr ffp $ \fp -> do
@@ -128,36 +231,28 @@ factorPermutationSM ffp = do
   permL <- readv permMV
   return $ SLA.permutationSM (V.length permMV) (fmap fromIntegral permL)
 
+unsafeFactorPermutationSM :: Num a => ForeignPtr CH.Factor -> SLA.SpMatrix a
+unsafeFactorPermutationSM = unsafePerformIO . factorPermutationSM
+{-# NOINLINE unsafeFactorPermutationSM #-}
+
 -- | retrieve the Cholesky Factor as an SLA.SpMatrix
 -- | NB: This undoes the factorization in Factor
 choleskyFactorSM :: ForeignPtr CH.Factor -> ForeignPtr CH.Common -> IO (SLA.SpMatrix Double)
 choleskyFactorSM ffp cfp = withForeignPtr ffp $ \fp -> do
   withForeignPtr cfp $ \cp -> do
-    printFactor ffp "Before" cfp
+    when debug $ printFactor ffp "Before" cfp
     changeFactorL (fromIntegral $ CH.unXType CH.xtReal) 1 0 0 0 fp cp
-    printFactor ffp "After" cfp
+    when debug $ printFactor ffp "After" cfp
     pSparse <- factorToSparseL fp cp :: IO (Ptr CH.Sparse)
     pTriplet <- sparseToTripletL pSparse cp :: IO (Ptr CH.Triplet)
-    tripletToSpMatrix pTriplet
-{-    
-    nRows <- CH.triplet_get_nrow pTriplet
-    nCols <- CH.triplet_get_ncol pTriplet
-    nZmax <- CH.triplet_get_nzmax pTriplet
-    rowIndicesP <- CH.triplet_get_row_indices pTriplet :: IO (Ptr CInt)
-    rowIndicesFP <- newForeignPtr_ rowIndicesP    
-    colIndicesP <- CH.triplet_get_col_indices pTriplet :: IO (Ptr CInt)
-    colIndicesFP <- newForeignPtr_ colIndicesP
-    valsP <- CH.triplet_get_x pTriplet  :: IO (Ptr CDouble)
-    valsFP <- newForeignPtr_ valsP
-    rowIndices <- readv (V.unsafeFromForeignPtr0 rowIndicesFP (fromIntegral nZmax))
-    colIndices <- readv (V.unsafeFromForeignPtr0 colIndicesFP (fromIntegral nZmax))
-    vals <- readv (V.unsafeFromForeignPtr0 valsFP (fromIntegral nZmax))
-    let triplets = zip3 (fmap fromIntegral rowIndices) (fmap fromIntegral colIndices) (fmap realToFrac vals)
-        sm = SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
-    SLA.prd sm    
-    return sm
--}
+    cf <- tripletToSpMatrix pTriplet
+    CH.triplet_free pTriplet cp
+    CH.sparse_free pSparse cp
+    return cf
 
+unsafeCholeskyFactorSM :: ForeignPtr CH.Factor -> ForeignPtr CH.Common -> SLA.SpMatrix Double
+unsafeCholeskyFactorSM fpf fpc = unsafePerformIO $ choleskyFactorSM fpf fpc
+                       
 tripletToSpMatrix :: Ptr CH.Triplet -> IO (SLA.SpMatrix Double)
 tripletToSpMatrix pTriplet = do
   nRows <- CH.triplet_get_nrow pTriplet
@@ -174,7 +269,7 @@ tripletToSpMatrix pTriplet = do
   vals <- readv (V.unsafeFromForeignPtr0 valsFP (fromIntegral nZmax))
   let triplets = zip3 (fmap fromIntegral rowIndices) (fmap fromIntegral colIndices) (fmap realToFrac vals)
       sm = SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
-  SLA.prd sm    
+  when debug $ SLA.prd sm    
   return sm
   
 
@@ -200,10 +295,10 @@ printSparse fps t fpc = withForeignPtr fps $ \ps -> do
   withForeignPtr fpc $ \pc -> do
     tSC <- newCString (T.unpack t)
     printSparseL ps tSC pc
-
+{-
 setFinalLL :: Int -> ForeignPtr CH.Common -> IO ()
 setFinalLL n fpc = withForeignPtr fpc $ \pc -> setFinalLLL n pc
-
+-}
 readv :: V.Storable a => V.IOVector a -> IO [a]
 readv v = sequence [ V.read v i | i <- [0 .. (V.length v) - 1] ]
 
@@ -228,8 +323,11 @@ foreign import ccall unsafe "cholmod.h cholmod_sparse_to_triplet"
 foreign import ccall unsafe "cholmod.h cholmod_change_factor"
   changeFactorL :: Int -> Int -> Int -> Int -> Int -> Ptr CH.Factor -> Ptr CH.Common -> IO CInt 
 
-foreign import ccall unsafe "cholmod_extras.h cholmod_set_final_ll"
-  setFinalLLL :: Int -> Ptr CH.Common -> IO ()
+foreign import ccall unsafe "cholmod.h cholmod_solve"
+  denseSolveL :: CInt -> Ptr CH.Factor -> Ptr CH.Dense -> Ptr CH.Common -> IO (Ptr CH.Dense)
+
+foreign import ccall unsafe "cholmod.h cholmod_spsolve"
+  sparseSolveL :: CInt -> Ptr CH.Factor -> Ptr CH.Sparse -> Ptr CH.Common -> IO (Ptr CH.Sparse)
 
 foreign import ccall unsafe "cholmod.h cholmod_print_common"
   printCommonL :: CString -> Ptr CH.Common -> IO ()

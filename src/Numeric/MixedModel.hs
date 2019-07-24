@@ -26,6 +26,10 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (-=-)
                                                 , (-||-)
                                                 )
+
+import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
+                                               as CH
+
 import qualified Numeric.LinearAlgebra         as LA
 --import qualified Numeric.NLOPT                 as NL
 
@@ -38,6 +42,8 @@ import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 
 type LevelSpec = (Int, Bool, Maybe (VB.Vector Bool)) -- level sizes and effects
+
+data DevianceType = ML | REML deriving (Show, Eq)
 
 effectsForLevel :: LevelSpec -> Int
 effectsForLevel (_, b, vbM) =
@@ -153,6 +159,7 @@ toSparseVector
   :: (LA.Container LA.Vector a, RealFrac a) => LA.Vector a -> SLA.SpVector a
 toSparseVector v = SLA.fromListDenseSV (LA.size v) $ LA.toList v
 
+-- TODO: Add levels checks
 checkProblem
   :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
   => LA.Matrix a -- ^ X
@@ -221,26 +228,85 @@ makeSTF levels
               id
             (s, t, _, qT) = FL.fold fld makers
         in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
+
 {-
 zStarTzStarPlusOne
-  :: (Num a, VS.Storable a)
+  :: ( Num a
+     , VS.Storable a
+     , SLA.AdditiveGroup a
+     , SLA.MatrixRing (SLA.SpMatrix a)
+     )
   => (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
   -> SLA.SpMatrix a -- ^ Z
   -> LA.Vector a -- ^ theta
   -> SLA.SpMatrix a
-zStarTzStarPlusOne makeST z th =
-  (SLA.transposeSM zStar) SLA.## zStar SLA.^+^ (SLA.eye $ SLA.ncols z)
+zStarTzStarPlusOne makeST smZ vTh =
+  (SLA.transposeSM zStar) SLA.## zStar SLA.^+^ (SLA.eye $ SLA.ncols smZ)
  where
-  (s, t) = makeST th
-  zStar  = z SLA.## s SLA.## t
+  (s, t) = makeST vTh
+  zStar  = smZ SLA.## s SLA.## t
   zStarT = SLA.transposeSM zStar
+-}
+
+zStar
+  :: (LA.Vector Double -> (SLA.SpMatrix Double, SLA.SpMatrix Double)) -- ^ make S and T from theta
+  -> SLA.SpMatrix Double -- ^ Z
+  -> LA.Vector Double -- ^ theta
+  -> SLA.SpMatrix Double
+zStar mkST smZ vTH = smZ SLA.## s SLA.## t where (s, t) = mkST vTH
+
+xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
+xTxPlusI smX =
+  (SLA.transposeSM smX) SLA.## smX SLA.^+^ (SLA.eye $ SLA.ncols smX)
+
+profiledDeviance2
+  :: CH.ForeignPtr CH.Common
+  -> CH.ForeignPtr CH.Factor -- ^ precomputed pattern work on Z
+  -> DevianceType
+  -> (LA.Vector Double -> (SLA.SpMatrix Double, SLA.SpMatrix Double)) -- ^ make S and T from theta
+  -> LA.Matrix Double -- ^ X
+  -> LA.Vector Double -- ^ y
+  -> SLA.SpMatrix Double -- ^ Z
+  -> LA.Vector Double -- ^ theta
+  -> IO Double
+profiledDeviance2 fpc fpf dt mkST mX vY smZ vTh = do
+  let smZS = zStar mkST smZ vTh
+  -- Cholesky factorize to get L_theta *and* update factor for solving with it
+  smLth <- CH.spMatrixCholesky fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ smZS
+  -- compute Rzx
+  let smZStX = (SLA.transpose smZS) SLA.## (toSparseMatrix mX)
+  -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
+  smPZStX <- CH.solveSparse fpc fpf CH.CHOLMOD_P smZStX -- P(Z*)'X 
+  smRzx   <- CH.solveSparse fpc fpf CH.CHOLMOD_L smPZStX
+  -- compute Rx
+  let xTxMinusRzxTRzx =
+        (LA.tr mX) LA.<> mX - (asDense $ (SLA.transposeSM smRzx) SLA.## smRzx)
+      smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
+--      sm = lower triangle of that thing
+  return 2
+{-
+-- NB: You must analyze the matrix before-hand with spMatrixAnalyze
+-- to get the factor for this function and the permuation, P.
+-- this function will compute L such that LL' = P((Z*)'(Z*) + I)P'
+updateLThetaFactor
+  :: (Num a, VS.Storable a, a ~ Double)
+  => CH.ForeignPtr CH.Common -- ^ pre-allocated environment for CHOLMOD
+  -> CH.ForeignPtr CH.Factor -- ^ pre-computed work for the pattern of (Z*)'(Z*) + I
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
+  -> SLA.SpMatrix a -- ^ Z
+  -> LA.Vector a -- ^ theta
+  -> IO ()
+updateLThetaFactor fpc fpf mkST smZ vTh =
+  CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ zStar
+    mkST
+    smZ
+    vTh -- zStarTzStarPlusOne makeST smZ vTh
+    
+computeRzx :: CH.ForeignPtr CH.Common -- ^ pre-allocated environment for CHOLMOD
+           -> CH.ForeignPtr CH.Factor -- ^ LL' factor
+           -> SLA.SpMatrix Double -- ^ Z*
+           -> IO (SLA.SpMatrix Double) -- ^
+           computr
 
 
-lTheta ::  :: (Num a, VS.Storable a)
-           => (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
-           -> SLA.SpMatrix a -- ^ Z
-           -> LA.Vector a -- ^ theta
-           -> SLA.SpMatrix a -- ^ lower triangular Cholesky factor
-lTheta makeST z th =
-  LA.tr $ LA.chol $ LA.trustSym $ asDense zStarTzStarPlusOne makeSt z th
 -}

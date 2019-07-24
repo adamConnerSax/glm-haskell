@@ -144,7 +144,7 @@ makeAStar' mX vY smZ mkST vTh = do
       c3     = (m_zsTy -=- m_xTy) -=- yTy
   return $ (c1 SLA.-||- c2) SLA.-||- c3
 
-data DevianceType = ML | REML deriving (Show, Eq)
+
 
 -- since A* is (p + q + 1) x (p + q + 1) so is L
 profiledDeviance
@@ -161,8 +161,9 @@ profiledDeviance
   -> (a, a, a, SLA.SpMatrix a)
 profiledDeviance cholmodC dt p q n smA cholmodF mkST th
   = let
-      smAS  = makeAStar p q smA mkST th
-      cholL = CH.unsafeSpMatrixCholesky cholmodC cholmodF smAS -- yikes!
+      smAS = makeAStar p q smA mkST th
+      cholL =
+        CH.unsafeSpMatrixCholesky cholmodC cholmodF CH.SquareSymmetricLower smAS -- yikes!
       --diagL = SLA.extractDiag cholL
       getDiagX n = SLA.lookupWD_SM cholL (n, n)
       r = getDiagX $ q + p
@@ -208,7 +209,8 @@ minimizeDeviance
 minimizeDeviance dt p q n levels smA mkST th0 = do
   cholmodC <- liftIO CH.allocCommon
   liftIO $ CH.startC cholmodC
-  (cholmodF, permSM) <- liftIO $ CH.spMatrixAnalyze cholmodC smA
+  (cholmodF, permSM) <- liftIO
+    $ CH.spMatrixAnalyze cholmodC CH.SquareSymmetricLower smA
   let
     pd x = profiledDeviance cholmodC dt p q n smA cholmodF mkST x
     obj x = (\(d, _, _, _) -> d) $ pd x
