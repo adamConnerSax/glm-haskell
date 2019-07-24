@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP                      #-}
-{-# LANGUAGE ForeignFunctionInterface #-} 
 {-# LANGUAGE EmptyDataDecls           #-}
+{-# LANGUAGE ForeignFunctionInterface #-} 
+{-# LANGUAGE OverloadedStrings #-}
 
 module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   (
@@ -10,8 +11,16 @@ module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   , factorPermutation
   , factorPermutationSM
   , choleskyFactorSM
+  , spMatrixToTriplet
+  , tripletToSpMatrix
   , readv
   , writev
+  -- * low-level
+  , printCommon
+  , printFactor
+  , printTriplet
+  , printSparse
+  , setFinalLL
   -- * re-exports
   , Factor
   , Common
@@ -23,8 +32,11 @@ where
 
 import Foreign hiding (free)
 import Foreign.C.Types
+import Foreign.C.String
 import Foreign.Storable (peek)
 import System.IO.Unsafe (unsafePerformIO)
+
+import qualified Data.Text as T
 
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Numeric.LinearAlgebra.Sparse          as SLA
@@ -46,7 +58,7 @@ spMatrixToTriplet fpc smX = do
              (fromIntegral nrows)
              (fromIntegral ncols)
              (fromIntegral nzMax)
-             CH.stSquareSymmetricLower
+             CH.stUnsymmetric
              CH.xtReal
              fpc
   rowIs <- CH.tripletGetRowIndices triplet
@@ -65,9 +77,12 @@ spMatrixAnalyze :: ForeignPtr CH.Common -- ^ CHOLMOD environment
                 -> SLA.SpMatrix Double -- ^ matrix to analyze
                 -> IO (ForeignPtr CH.Factor, SLA.SpMatrix Double) -- ^ analysis and fill-reducing permutation
 spMatrixAnalyze fpc smX = do
+--  withForeignPtr fpc $ \cp -> setFinalLL 1 cp
   triplet <- spMatrixToTriplet fpc smX
+  printTriplet (CH.fPtr triplet) "spMatrixAnalyze" fpc
   sparse <- CH.tripletToSparse triplet fpc
   f <- CH.analyze sparse fpc
+  printFactor f "spMatrixAnalyze" fpc
   permSM <- factorPermutationSM f
   return (f, permSM)
   
@@ -79,9 +94,12 @@ spMatrixCholesky :: ForeignPtr CH.Common -- ^ CHOLMOD environment
                  -> SLA.SpMatrix Double -- ^ matrix to decompose
                  -> IO (SLA.SpMatrix Double) -- ^ lower-triangular Cholesky factor
 spMatrixCholesky fpc fpf smX = do  
-  triplet <- spMatrixToTriplet fpc smX 
-  sparse <- CH.tripletToSparse triplet fpc  
+  triplet <- spMatrixToTriplet fpc smX
+  printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
+  sparse <- CH.tripletToSparse triplet fpc
+  printSparse (CH.fPtr sparse) "spMatrixCholesky" fpc
   CH.factorize sparse fpf fpc
+  printFactor fpf "spMatrixCholesky (after factorize):" fpc
   choleskyFactorSM fpf fpc
 
 -- |  compute the lower-triangular Cholesky factor using the given analysis stored in Factor
@@ -115,9 +133,13 @@ factorPermutationSM ffp = do
 choleskyFactorSM :: ForeignPtr CH.Factor -> ForeignPtr CH.Common -> IO (SLA.SpMatrix Double)
 choleskyFactorSM ffp cfp = withForeignPtr ffp $ \fp -> do
   withForeignPtr cfp $ \cp -> do
-    changeFactorL (fromIntegral $ CH.unXType CH.xtReal) 1 1 0 1 fp cp
+    printFactor ffp "Before" cfp
+    changeFactorL (fromIntegral $ CH.unXType CH.xtReal) 1 0 0 0 fp cp
+    printFactor ffp "After" cfp
     pSparse <- factorToSparseL fp cp :: IO (Ptr CH.Sparse)
     pTriplet <- sparseToTripletL pSparse cp :: IO (Ptr CH.Triplet)
+    tripletToSpMatrix pTriplet
+{-    
     nRows <- CH.triplet_get_nrow pTriplet
     nCols <- CH.triplet_get_ncol pTriplet
     nZmax <- CH.triplet_get_nzmax pTriplet
@@ -134,7 +156,53 @@ choleskyFactorSM ffp cfp = withForeignPtr ffp $ \fp -> do
         sm = SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
     SLA.prd sm    
     return sm
+-}
 
+tripletToSpMatrix :: Ptr CH.Triplet -> IO (SLA.SpMatrix Double)
+tripletToSpMatrix pTriplet = do
+  nRows <- CH.triplet_get_nrow pTriplet
+  nCols <- CH.triplet_get_ncol pTriplet
+  nZmax <- CH.triplet_get_nzmax pTriplet
+  rowIndicesP <- CH.triplet_get_row_indices pTriplet :: IO (Ptr CInt)
+  rowIndicesFP <- newForeignPtr_ rowIndicesP    
+  colIndicesP <- CH.triplet_get_col_indices pTriplet :: IO (Ptr CInt)
+  colIndicesFP <- newForeignPtr_ colIndicesP
+  valsP <- CH.triplet_get_x pTriplet  :: IO (Ptr CDouble)
+  valsFP <- newForeignPtr_ valsP
+  rowIndices <- readv (V.unsafeFromForeignPtr0 rowIndicesFP (fromIntegral nZmax))
+  colIndices <- readv (V.unsafeFromForeignPtr0 colIndicesFP (fromIntegral nZmax))
+  vals <- readv (V.unsafeFromForeignPtr0 valsFP (fromIntegral nZmax))
+  let triplets = zip3 (fmap fromIntegral rowIndices) (fmap fromIntegral colIndices) (fmap realToFrac vals)
+      sm = SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
+  SLA.prd sm    
+  return sm
+  
+
+printCommon :: T.Text -> ForeignPtr CH.Common -> IO ()
+printCommon t fpc = withForeignPtr fpc $ \fp -> do
+  tCS <- newCString (T.unpack t)
+  printCommonL tCS fp
+
+printFactor :: ForeignPtr CH.Factor -> T.Text -> ForeignPtr CH.Common -> IO ()
+printFactor fpf t fpc = withForeignPtr fpf $ \pf -> do
+  withForeignPtr fpc $ \pc -> do
+    tSC <- newCString (T.unpack t)
+    printFactorL pf tSC pc
+
+printTriplet :: ForeignPtr CH.Triplet -> T.Text -> ForeignPtr CH.Common -> IO ()
+printTriplet fpt t fpc = withForeignPtr fpt $ \pt -> do
+  withForeignPtr fpc $ \pc -> do
+    tSC <- newCString (T.unpack t)
+    printTripletL pt tSC pc
+
+printSparse :: ForeignPtr CH.Sparse -> T.Text -> ForeignPtr CH.Common -> IO ()
+printSparse fps t fpc = withForeignPtr fps $ \ps -> do
+  withForeignPtr fpc $ \pc -> do
+    tSC <- newCString (T.unpack t)
+    printSparseL ps tSC pc
+
+setFinalLL :: Int -> ForeignPtr CH.Common -> IO ()
+setFinalLL n fpc = withForeignPtr fpc $ \pc -> setFinalLLL n pc
 
 readv :: V.Storable a => V.IOVector a -> IO [a]
 readv v = sequence [ V.read v i | i <- [0 .. (V.length v) - 1] ]
@@ -159,6 +227,23 @@ foreign import ccall unsafe "cholmod.h cholmod_sparse_to_triplet"
 
 foreign import ccall unsafe "cholmod.h cholmod_change_factor"
   changeFactorL :: Int -> Int -> Int -> Int -> Int -> Ptr CH.Factor -> Ptr CH.Common -> IO CInt 
+
+foreign import ccall unsafe "cholmod_extras.h cholmod_set_final_ll"
+  setFinalLLL :: Int -> Ptr CH.Common -> IO ()
+
+foreign import ccall unsafe "cholmod.h cholmod_print_common"
+  printCommonL :: CString -> Ptr CH.Common -> IO ()
+
+foreign import ccall unsafe "cholmod.h cholmod_print_factor"
+  printFactorL :: Ptr CH.Factor -> CString -> Ptr CH.Common -> IO ()
+
+foreign import ccall unsafe "cholmod.h cholmod_print_triplet"
+  printTripletL :: Ptr CH.Triplet -> CString -> Ptr CH.Common -> IO ()
+
+foreign import ccall unsafe "cholmod.h cholmod_print_sparse"
+  printSparseL :: Ptr CH.Sparse -> CString -> Ptr CH.Common -> IO ()
+
+
 
 {-
 -- | the factor L

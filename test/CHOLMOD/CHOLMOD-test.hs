@@ -1,9 +1,10 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE  FlexibleInstances    #-}
-
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 -- * base
 import           Foreign                        ( ForeignPtr
                                                 , Storable
+                                                , withForeignPtr
                                                 )
 import           Foreign.C.Types                ( CDouble
                                                 , CInt
@@ -40,7 +41,9 @@ main = do
 
   c <- allocCommon :: IO (ForeignPtr Common)
   startC c
-
+  setFinalLL 1 c
+  printCommon "" c
+{-
   let n  = 5 :: CSize
       nz = (n + 1) * n `div` 2 :: CSize
       nn = fromIntegral n :: CSize
@@ -167,11 +170,30 @@ main = do
         , (4, 3, 54)
         , (4, 4, 55)
         ]
-  putStrLn $ "mX="
-  LA.disp 1 $ asDense mX
-  (cholmodFactor, cholPerm) <- spMatrixAnalyze c mX
-  let cholL_CM  = unsafeSpMatrixCholesky c cholmodFactor mX
-      cholL'_CM = unsafeSpMatrixCholesky c cholmodFactor mX'
+-}
+  let smY = SLA.fromListSM
+        (3, 3)
+        [ (0, 0, 2)
+        , (0, 1, -1)
+        , (0, 2, 0)
+        , (1, 0, -1)
+        , (1, 1, 2)
+        , (1, 2, -1)
+        , (2, 0, 0)
+        , (2, 1, -1)
+        , (2, 2, 2)
+        ]
+
+  putStrLn $ "smY="
+  LA.disp 1 $ asDense smY
+  mt   <- spMatrixToTriplet c smY
+  smY' <- withForeignPtr (fPtr mt) tripletToSpMatrix
+  putStrLn $ "smY'="
+  LA.disp 1 $ asDense smY'
+  (cholmodFactor, cholPerm) <- spMatrixAnalyze c smY
+  cholL_CM                  <- spMatrixCholesky c cholmodFactor smY
+
+--      cholL'_CM = unsafeSpMatrixCholesky c cholmodFactor mX'
 --      cholL_HM  = LA.tr $ LA.chol $ LA.trustSym $ LA.tr $ asDense mX
 --      cholL'_HM = LA.tr $ LA.chol $ LA.trustSym $ LA.tr $ asDense mX'
   putStrLn $ "perm="
@@ -182,11 +204,7 @@ main = do
   putStrLn $ "LLt="
   LA.disp 2 $ asDense (cholL_CM SLA.## (SLA.transposeSM cholL_CM))
 
-  putStrLn $ "L' (CHOLMOD)="
-  LA.disp 2 $ asDense cholL'_CM
-  putStrLn "done"
-
-
+  return ()
 {-
 writev :: (Storable a) => V.IOVector a -> [a] -> IO ()
 writev v xs =

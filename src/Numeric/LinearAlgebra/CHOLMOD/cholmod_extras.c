@@ -15,6 +15,14 @@ int* cholmod_factor_permutation(cholmod_factor* a)
   return (int*) a->Perm; 
 }
 
+
+void cholmod_set_final_ll(int final_ll, cholmod_common *c)
+{  
+  c->final_asis = 0;
+  c->final_ll = final_ll;
+  c->print = 10;
+}
+
 /*
 cholmod_sparse*  cholmod_factor_sparse(cholmod_common* c, cholmod_factor* a)
 {

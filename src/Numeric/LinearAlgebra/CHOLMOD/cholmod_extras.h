@@ -9,9 +9,15 @@
 // void** addressOf(void* ptr);
 size_t cholmod_factor_n(cholmod_factor* a);
 size_t cholmod_factor_nzmax(cholmod_factor* a);
-
-
 int* cholmod_factor_permutation(cholmod_factor* a);
+void cholmod_set_final_ll(int final_ll, cholmod_common* c);
+/*
+void cholmod_print_common(cholmod_common *c);
+void cholmod_print_factor(cholmod_factor *c);
+void cholmod_print_triplet(cholmod_triplet *c);
+*/
+
+
 
 //cholmod_sparse*  cholmod_factor_sparse(cholmod_common* c, cholmod_factor* a);
 
