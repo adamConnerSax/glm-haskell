@@ -18,7 +18,7 @@ import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Numeric.LinearAlgebra.Class   as SLA
---import qualified Numeric.LinearAlgebra.Sparse  as SLA
+import qualified Numeric.LinearAlgebra.Sparse  as SLA
 import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (#^#)
                                                 , (<#)
@@ -229,84 +229,75 @@ makeSTF levels
             (s, t, _, qT) = FL.fold fld makers
         in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
 
-{-
-zStarTzStarPlusOne
-  :: ( Num a
-     , VS.Storable a
-     , SLA.AdditiveGroup a
-     , SLA.MatrixRing (SLA.SpMatrix a)
-     )
-  => (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
-  -> SLA.SpMatrix a -- ^ Z
-  -> LA.Vector a -- ^ theta
-  -> SLA.SpMatrix a
-zStarTzStarPlusOne makeST smZ vTh =
-  (SLA.transposeSM zStar) SLA.## zStar SLA.^+^ (SLA.eye $ SLA.ncols smZ)
- where
-  (s, t) = makeST vTh
-  zStar  = smZ SLA.## s SLA.## t
-  zStarT = SLA.transposeSM zStar
--}
-
-zStar
-  :: (LA.Vector Double -> (SLA.SpMatrix Double, SLA.SpMatrix Double)) -- ^ make S and T from theta
-  -> SLA.SpMatrix Double -- ^ Z
-  -> LA.Vector Double -- ^ theta
-  -> SLA.SpMatrix Double
-zStar mkST smZ vTH = smZ SLA.## s SLA.## t where (s, t) = mkST vTH
-
 xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
 xTxPlusI smX =
   (SLA.transposeSM smX) SLA.## smX SLA.^+^ (SLA.eye $ SLA.ncols smX)
 
+logDetTriangularSM :: RealFloat a => SLA.SpMatrix a -> a
+logDetTriangularSM smX =
+  let f (_, _, x) = log x
+      diag (r, c, _) = (r == c)
+  in  FL.fold (FL.premap f FL.sum) $ L.filter diag $ SLA.toListSM smX
+
 profiledDeviance2
   :: CH.ForeignPtr CH.Common
   -> CH.ForeignPtr CH.Factor -- ^ precomputed pattern work on Z
+  -> SLA.SpMatrix Double -- ^ permutation matrix from above
   -> DevianceType
-  -> (LA.Vector Double -> (SLA.SpMatrix Double, SLA.SpMatrix Double)) -- ^ make S and T from theta
+  -> (  LA.Vector Double
+     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
+     ) -- ^ make S and T from theta
   -> LA.Matrix Double -- ^ X
   -> LA.Vector Double -- ^ y
   -> SLA.SpMatrix Double -- ^ Z
   -> LA.Vector Double -- ^ theta
-  -> IO Double
-profiledDeviance2 fpc fpf dt mkST mX vY smZ vTh = do
-  let smZS = zStar mkST smZ vTh
+  -> IO (Double, LA.Vector Double, LA.Vector Double) -- ^ (pd, beta, b) 
+profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
+  let (smS, smT) = mkST vTh
+      smZS       = smZ SLA.## (smT SLA.## smS)
+      smZSt      = SLA.transpose smZS
+      n          = LA.size vY
+      (_, p)     = LA.size mX
+      (_, q)     = SLA.dim smZ
   -- Cholesky factorize to get L_theta *and* update factor for solving with it
-  smLth <- CH.spMatrixCholesky fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ smZS
+  CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ smZS
   -- compute Rzx
-  let smZStX = (SLA.transpose smZS) SLA.## (toSparseMatrix mX)
+  let smZStX = smZSt SLA.## (toSparseMatrix mX)
+--  putStrLn "Z*'X=" >> LA.disp 2 (asDense smZStX)
   -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
-  smPZStX <- CH.solveSparse fpc fpf CH.CHOLMOD_P smZStX -- P(Z*)'X 
-  smRzx   <- CH.solveSparse fpc fpf CH.CHOLMOD_L smPZStX
+  smPZStX <- CH.solveSparse fpc fpf CH.CHOLMOD_P smZStX -- P(Z*)'X
+--  putStrLn "PZ*'X=" >> LA.disp 2 (asDense smPZStX)
+  smRzx   <- CH.solveSparse fpc fpf CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
+--  putStrLn "Rzx=" >> LA.disp 2 (asDense smRzx)
+  smLth   <- CH.choleskyFactorSM fpf fpc -- this has to happen after the solves because it unfactors the factor...
+--  putStrLn "Lth=" >> LA.disp 2 (asDense smLth)
   -- compute Rx
   let xTxMinusRzxTRzx =
         (LA.tr mX) LA.<> mX - (asDense $ (SLA.transposeSM smRzx) SLA.## smRzx)
-      smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
---      sm = lower triangle of that thing
-  return 2
-{-
--- NB: You must analyze the matrix before-hand with spMatrixAnalyze
--- to get the factor for this function and the permuation, P.
--- this function will compute L such that LL' = P((Z*)'(Z*) + I)P'
-updateLThetaFactor
-  :: (Num a, VS.Storable a, a ~ Double)
-  => CH.ForeignPtr CH.Common -- ^ pre-allocated environment for CHOLMOD
-  -> CH.ForeignPtr CH.Factor -- ^ pre-computed work for the pattern of (Z*)'(Z*) + I
-  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ make S and T from theta
-  -> SLA.SpMatrix a -- ^ Z
-  -> LA.Vector a -- ^ theta
-  -> IO ()
-updateLThetaFactor fpc fpf mkST smZ vTh =
-  CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ zStar
-    mkST
-    smZ
-    vTh -- zStarTzStarPlusOne makeST smZ vTh
-    
-computeRzx :: CH.ForeignPtr CH.Common -- ^ pre-allocated environment for CHOLMOD
-           -> CH.ForeignPtr CH.Factor -- ^ LL' factor
-           -> SLA.SpMatrix Double -- ^ Z*
-           -> IO (SLA.SpMatrix Double) -- ^
-           computr
+--  LA.disp 2 xTxMinusRzxTRzx
+  let smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
+      smUT = (SLA.transpose smLth -||- smRzx) -=- (SLA.zeroSM p q -||- smRx)
+      smLT = SLA.transpose smUT
+      svBu = (smP SLA.## smZSt) SLA.#> (toSparseVector vY)
+      svBl = toSparseVector $ (LA.tr mX) LA.#> vY
+  let svB =
+        SLA.fromListSV (q + p)
+          $  (SLA.toListSV svBu)
+          ++ (fmap (\(i, x) -> (i + q, x)) (SLA.toListSV svBl))
+--  putStrLn $ show $ asDenseV svB
+  svX :: SLA.SpVector Double <- SLA.luSolve smLT smUT svB
+--  putStrLn $ show $ asDenseV svX
+  let svPu          = SLA.takeSV q svX
+      svu           = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
+      svb           = (smT SLA.## smS) SLA.#> svu
+      vBeta         = asDenseV $ SLA.takeSV q svX
+      vDev          = vY - (mX LA.#> vBeta) - (asDenseV $ smZS SLA.#> svu)
+      rTheta2       = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
+      logLth        = logDetTriangularSM smLth
+      (logDet, dof) = case dt of
+        ML   -> (realToFrac n, logLth)
+        REML -> (realToFrac (n - p), logLth * (logDetTriangularSM smRx))
+      pd = 2 * logDet + dof * (1 + (2 * pi * rTheta2 / dof))
+  return (pd, vBeta, asDenseV $ svb)
 
 
--}

@@ -38,7 +38,7 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Numeric.NLOPT                 as NL
 
-
+import           System.IO.Unsafe               ( unsafePerformIO )
 
 --import           Data.Either                    ( partitionEithers )
 import qualified Data.List                     as L
@@ -243,6 +243,68 @@ minimizeDeviance dt p q n levels smA mkST th0 = do
       liftIO $ print thS
       return $ (thS, permSM, pd thS)
 
+minimizeDeviance2
+  :: SemC r
+  => DevianceType
+  -> Levels
+  -> LA.Matrix Double -- ^ X
+  -> LA.Vector Double -- ^ y
+  -> SLA.SpMatrix Double -- ^ Z
+  -> (  LA.Vector Double
+     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
+     ) -- ^ make S and T
+  -> LA.Vector Double -- ^ initial guess for theta
+  -> P.Sem
+       r
+       ( LA.Vector Double
+       , LA.Vector Double
+       , LA.Vector Double
+       ) -- ^ (theta, beta, b)
+minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
+  cholmodC <- liftIO CH.allocCommon
+  liftIO $ CH.startC cholmodC
+  liftIO $ CH.setFinalLL 1 cholmodC -- I don't quite get this.  We should be able to solve LDx = b either way??
+  (cholmodF, smP) <-
+    liftIO
+    $      CH.spMatrixAnalyze cholmodC CH.SquareSymmetricLower
+    $      SLA.transpose smZ
+    SLA.## smZ
+  let
+    pd x = profiledDeviance2 cholmodC cholmodF smP dt mkST mX vY smZ x
+    obj x = unsafePerformIO $ fmap (\(d, _, _) -> d) $ pd x
+    stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| []
+    thetaLB        = thetaLowerBounds levels
+    algorithm      = NL.BOBYQA obj [thetaLB] Nothing
+    problem        = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
+    expThetaLength = FL.fold
+      (FL.premap
+        (\l -> let e = effectsForLevel l in e + (e * (e - 1) `div` 2))
+        FL.sum
+      )
+      levels
+  when (LA.size th0 /= expThetaLength)
+    $  P.throw
+    $  "guess for theta has "
+    <> (T.pack $ show $ LA.size th0)
+    <> " entries but should have "
+    <> (T.pack $ show expThetaLength)
+    <> "."
+--  _ <- liftIO $ pd th0
+  let eSol = NL.minimizeLocal problem th0
+  case eSol of
+    Left  result                       -> P.throw (T.pack $ show result)
+    Right (NL.Solution pdS thS result) -> do
+      liftIO
+        $  putStrLn
+        $  show "Solution ("
+        ++ show result
+        ++ ") reached! At th="
+      liftIO $ print thS
+      (_, vBeta, vb) <- liftIO $ pd thS
+      return (thS, vBeta, vb)
+
+
+
 parametersFromSolution
   :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
   => DevianceType -- ^ unused for now??
@@ -305,6 +367,7 @@ report p q levels vY mX smZ svBeta svb = do
                            (VS.take n $ VS.drop (n * s) bS)
         )
         [0 .. (numSlopes - 1)]
+  liftIO $ putStrLn $ "p=" ++ show p ++ "; q=" ++ show q
   liftIO $ reportMean0 "Residual" vEps
   let numberedLevels = zip [0 ..] (VB.toList levels)
   liftIO $ mapM_

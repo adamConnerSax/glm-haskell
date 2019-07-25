@@ -49,21 +49,24 @@ import qualified Data.Vector.Storable          as VS
 
 
 
-data LinkFunctionType = IdentityLink | LogisticLink | PoissonLink deriving (Show, Eq)
+data LinkFunctionType = IdentityLink -- | LogisticLink | PoissonLink deriving (Show, Eq)
 data LinkFunction a = LinkFunction { g :: a -> a
                                    , h :: a -> a
                                    , dhdx :: a -> a -- useful in PIRLS algo
                                    }
 
-{-
+
 linkFunction :: RealFrac a => LinkFunctionType -> LinkFunction a
 linkFunction IdentityLink = LinkFunction id id (const 1)
+{-
 linkFunction LogisticLink = LinkFunction (\x -> log $ x / (1 - x))
                                          (\x -> exp x / (1 + exp x))
                                          (\x -> exp x / (1 + exp x) ^^ 2)
 linkFunction PoissonLink = LinkFunction log exp exp
-
 -}
+
+
+
 
 {-
 

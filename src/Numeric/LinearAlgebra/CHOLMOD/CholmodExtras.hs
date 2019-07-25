@@ -22,6 +22,7 @@ module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   , tripletToSpMatrix
   , readv
   , writev
+  , setFinalLL
   -- * low-level
   , printCommon
   , printFactor
@@ -86,6 +87,7 @@ hcholmodSType SquareSymmetricUpper = CH.stSquareSymmetricUpper
 hcholmodSType SquareSymmetricLower = CH.stSquareSymmetricLower
 
 debug = False
+debugSolve = False
 
 solveSparse :: ForeignPtr CH.Common -- ^ CHOLMOD environment
             -> ForeignPtr CH.Factor -- ^ contains P and LL' (or LDL')  
@@ -94,15 +96,20 @@ solveSparse :: ForeignPtr CH.Common -- ^ CHOLMOD environment
             -> IO (SLA.SpMatrix Double) -- ^ solutions
 solveSparse fpc fpf ss smB = do
   mTripletB <- spMatrixToTriplet fpc UnSymmetric smB
+  when debugSolve $ printTriplet (CH.fPtr mTripletB) "solveSparse input triplet" fpc
   mSparseB <- CH.tripletToSparse mTripletB fpc
+  when debugSolve $ printSparse (CH.fPtr mSparseB) "solveSparse input sparse" fpc
   withForeignPtr fpc $ \pc -> do
     withForeignPtr fpf $ \pf -> do
       withForeignPtr (CH.fPtr mSparseB) $ \pSparseB -> do
         pSparseX <- sparseSolveL (cholmodSystem ss) pf pSparseB pc
+        when debugSolve $ printSparse' pSparseX "solveSparse output sparse" fpc
+        pTripletX <- sparseToTripletL pSparseX pc
+        when debugSolve $ printTriplet' pTripletX "solveSparse output triplet" fpc
+        smX <- tripletToSpMatrix pTripletX
+--        when debugSolve $ SLA.prd smX
         CH.sparse_free pSparseB pc
         withForeignPtr (CH.fPtr mTripletB) $ \pt -> CH.triplet_free pt pc       
-        pTripletX <- sparseToTripletL pSparseX pc
-        smX <- tripletToSpMatrix pTripletX
         CH.triplet_free pTripletX pc
         CH.sparse_free pSparseX pc
         return smX
@@ -295,10 +302,35 @@ printSparse fps t fpc = withForeignPtr fps $ \ps -> do
   withForeignPtr fpc $ \pc -> do
     tSC <- newCString (T.unpack t)
     printSparseL ps tSC pc
-{-
+
+printCommon' :: T.Text -> Ptr CH.Common -> IO ()
+printCommon' t pc = do
+  tCS <- newCString (T.unpack t)
+  printCommonL tCS pc
+
+printFactor' :: Ptr CH.Factor -> T.Text -> ForeignPtr CH.Common -> IO ()
+printFactor' pf t fpc = do
+  withForeignPtr fpc $ \pc -> do
+    tSC <- newCString (T.unpack t)
+    printFactorL pf tSC pc
+
+printTriplet' :: Ptr CH.Triplet -> T.Text -> ForeignPtr CH.Common -> IO ()
+printTriplet' pt t fpc = do
+  withForeignPtr fpc $ \pc -> do
+    tSC <- newCString (T.unpack t)
+    printTripletL pt tSC pc
+
+printSparse' :: Ptr CH.Sparse -> T.Text -> ForeignPtr CH.Common -> IO ()
+printSparse' ps t fpc = do
+  withForeignPtr fpc $ \pc -> do
+    tSC <- newCString (T.unpack t)
+    printSparseL ps tSC pc
+
+    
+
 setFinalLL :: Int -> ForeignPtr CH.Common -> IO ()
 setFinalLL n fpc = withForeignPtr fpc $ \pc -> setFinalLLL n pc
--}
+
 readv :: V.Storable a => V.IOVector a -> IO [a]
 readv v = sequence [ V.read v i | i <- [0 .. (V.length v) - 1] ]
 
@@ -313,6 +345,9 @@ foreign import ccall unsafe "cholmod_extras.h cholmod_factor_n"
 -- | the array of indices representing the permutation matrix in the factor
 foreign import ccall unsafe "cholmod_extras.h cholmod_factor_permutation"
   factorPermutationL :: Ptr CH.Factor -> IO (Ptr CInt)
+
+foreign import ccall unsafe "cholmod_extras.h cholmod_set_final_ll"
+   setFinalLLL :: Int -> Ptr CH.Common -> IO () 
 
 foreign import ccall unsafe "cholmod.h cholmod_factor_to_sparse"
   factorToSparseL :: Ptr CH.Factor -> Ptr CH.Common -> IO (Ptr CH.Sparse) 

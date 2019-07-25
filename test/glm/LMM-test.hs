@@ -161,6 +161,24 @@ main = do
       putStrLn $ "ML Random (u, AKA b*) =" ++ show (asDenseV bS_ML)
       putStrLn $ "ML Random (b) =" ++ show (asDenseV b_ML)
     report p q levels vY mX smZ beta_ML b_ML
+
+    (th2_ML, vBeta2_ML, vb2_ML) <- minimizeDeviance2 ML
+                                                     levels
+                                                     mX
+                                                     vY
+                                                     smZ
+                                                     makeST
+                                                     th0
+    liftIO $ putStrLn $ "ML Via method 2"
+    report p
+           q
+           levels
+           vY
+           mX
+           smZ
+           (toSparseVector vBeta2_ML)
+           (toSparseVector vb2_ML)
+
     (th_REML, perm_REML, (pd_REML, ldL2_REML, r_REML, ldL_REML)) <-
       minimizeDeviance REML p q n levels smA makeST th0
     liftIO $ putStrLn $ "REML Solution: profiled Deviance=" ++ (show pd_REML)
@@ -185,6 +203,24 @@ main = do
       putStrLn $ "ML Random (u, AKA b*) =" ++ show (asDenseV bS_REML)
       putStrLn $ "REML Random (b) =" ++ show (asDenseV b_REML)
     report p q levels vY mX smZ beta_REML b_REML
+
+    (th2_REML, vBeta2_REML, vb2_REML) <- minimizeDeviance2 REML
+                                                           levels
+                                                           mX
+                                                           vY
+                                                           smZ
+                                                           makeST
+                                                           th0
+    liftIO $ putStrLn $ "REML Via method 2"
+    report p
+           q
+           levels
+           vY
+           mX
+           smZ
+           (toSparseVector vBeta2_REML)
+           (toSparseVector vb2_REML)
+
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
     Right ()  -> putStrLn $ "Success!"
