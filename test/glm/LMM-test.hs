@@ -169,7 +169,10 @@ main = do
                                                      smZ
                                                      makeST
                                                      th0
-    liftIO $ putStrLn $ "ML Via method 2"
+    liftIO $ do
+      putStrLn $ "ML Via method 2"
+      putStrLn $ "beta=" ++ show vBeta2_ML
+      putStrLn $ "b=" ++ show vb2_ML
     report p
            q
            levels
@@ -211,7 +214,10 @@ main = do
                                                            smZ
                                                            makeST
                                                            th0
-    liftIO $ putStrLn $ "REML Via method 2"
+    liftIO $ do
+      putStrLn $ "REML Via method 2"
+      putStrLn $ "beta=" ++ show vBeta2_REML
+      putStrLn $ "b=" ++ show vb2_REML
     report p
            q
            levels

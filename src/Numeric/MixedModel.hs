@@ -290,13 +290,13 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
   let svPu          = SLA.takeSV q svX
       svu           = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
       svb           = (smT SLA.## smS) SLA.#> svu
-      vBeta         = asDenseV $ SLA.takeSV q svX
+      vBeta         = asDenseV $ SLA.takeSV p $ SLA.dropSV q svX
       vDev          = vY - (mX LA.#> vBeta) - (asDenseV $ smZS SLA.#> svu)
       rTheta2       = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
       logLth        = logDetTriangularSM smLth
       (logDet, dof) = case dt of
         ML   -> (realToFrac n, logLth)
-        REML -> (realToFrac (n - p), logLth * (logDetTriangularSM smRx))
+        REML -> (realToFrac (n - p), logLth + (logDetTriangularSM smRx))
       pd = 2 * logDet + dof * (1 + (2 * pi * rTheta2 / dof))
   return (pd, vBeta, asDenseV $ svb)
 

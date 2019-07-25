@@ -289,7 +289,12 @@ minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
     <> " entries but should have "
     <> (T.pack $ show expThetaLength)
     <> "."
---  _ <- liftIO $ pd th0
+{-  liftIO $ do
+    (pd, vBeta, vb) <- pd th0
+    putStrLn $ "pd=" ++ show pd
+    putStrLn $ "beta=" ++ show vBeta
+    putStrLn $ "b=" ++ show vb
+-}
   let eSol = NL.minimizeLocal problem th0
   case eSol of
     Left  result                       -> P.throw (T.pack $ show result)
