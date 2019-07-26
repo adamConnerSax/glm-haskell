@@ -257,6 +257,7 @@ minimizeDeviance2
   -> P.Sem
        r
        ( LA.Vector Double
+       , Double
        , LA.Vector Double
        , LA.Vector Double
        ) -- ^ (theta, beta, b)
@@ -289,12 +290,6 @@ minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
     <> " entries but should have "
     <> (T.pack $ show expThetaLength)
     <> "."
-{-  liftIO $ do
-    (pd, vBeta, vb) <- pd th0
-    putStrLn $ "pd=" ++ show pd
-    putStrLn $ "beta=" ++ show vBeta
-    putStrLn $ "b=" ++ show vb
--}
   let eSol = NL.minimizeLocal problem th0
   case eSol of
     Left  result                       -> P.throw (T.pack $ show result)
@@ -305,8 +300,8 @@ minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
         ++ show result
         ++ ") reached! At th="
       liftIO $ print thS
-      (_, vBeta, vb) <- liftIO $ pd thS
-      return (thS, vBeta, vb)
+      (pd, vBeta, vb) <- liftIO $ pd thS
+      return (thS, pd, vBeta, vb)
 
 
 

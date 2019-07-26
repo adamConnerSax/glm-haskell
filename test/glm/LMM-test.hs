@@ -162,15 +162,16 @@ main = do
       putStrLn $ "ML Random (b) =" ++ show (asDenseV b_ML)
     report p q levels vY mX smZ beta_ML b_ML
 
-    (th2_ML, vBeta2_ML, vb2_ML) <- minimizeDeviance2 ML
-                                                     levels
-                                                     mX
-                                                     vY
-                                                     smZ
-                                                     makeST
-                                                     th0
+    (th2_ML, pd2_ML, vBeta2_ML, vb2_ML) <- minimizeDeviance2 ML
+                                                             levels
+                                                             mX
+                                                             vY
+                                                             smZ
+                                                             makeST
+                                                             th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
+      putStrLn $ "deviance=" ++ show pd2_ML
       putStrLn $ "beta=" ++ show vBeta2_ML
       putStrLn $ "b=" ++ show vb2_ML
     report p
@@ -207,15 +208,16 @@ main = do
       putStrLn $ "REML Random (b) =" ++ show (asDenseV b_REML)
     report p q levels vY mX smZ beta_REML b_REML
 
-    (th2_REML, vBeta2_REML, vb2_REML) <- minimizeDeviance2 REML
-                                                           levels
-                                                           mX
-                                                           vY
-                                                           smZ
-                                                           makeST
-                                                           th0
+    (th2_REML, pd2_REML, vBeta2_REML, vb2_REML) <- minimizeDeviance2 REML
+                                                                     levels
+                                                                     mX
+                                                                     vY
+                                                                     smZ
+                                                                     makeST
+                                                                     th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
+      putStrLn $ "deviance=" ++ show pd2_REML
       putStrLn $ "beta=" ++ show vBeta2_REML
       putStrLn $ "b=" ++ show vb2_REML
     report p

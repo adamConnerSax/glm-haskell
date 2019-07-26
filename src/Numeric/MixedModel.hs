@@ -263,18 +263,13 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
   CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ smZS
   -- compute Rzx
   let smZStX = smZSt SLA.## (toSparseMatrix mX)
---  putStrLn "Z*'X=" >> LA.disp 2 (asDense smZStX)
   -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
   smPZStX <- CH.solveSparse fpc fpf CH.CHOLMOD_P smZStX -- P(Z*)'X
---  putStrLn "PZ*'X=" >> LA.disp 2 (asDense smPZStX)
   smRzx   <- CH.solveSparse fpc fpf CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
---  putStrLn "Rzx=" >> LA.disp 2 (asDense smRzx)
   smLth   <- CH.choleskyFactorSM fpf fpc -- this has to happen after the solves because it unfactors the factor...
---  putStrLn "Lth=" >> LA.disp 2 (asDense smLth)
   -- compute Rx
   let xTxMinusRzxTRzx =
         (LA.tr mX) LA.<> mX - (asDense $ (SLA.transposeSM smRzx) SLA.## smRzx)
---  LA.disp 2 xTxMinusRzxTRzx
   let smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
       smUT = (SLA.transpose smLth -||- smRzx) -=- (SLA.zeroSM p q -||- smRx)
       smLT = SLA.transpose smUT
@@ -284,9 +279,7 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
         SLA.fromListSV (q + p)
           $  (SLA.toListSV svBu)
           ++ (fmap (\(i, x) -> (i + q, x)) (SLA.toListSV svBl))
---  putStrLn $ show $ asDenseV svB
   svX :: SLA.SpVector Double <- SLA.luSolve smLT smUT svB
---  putStrLn $ show $ asDenseV svX
   let svPu          = SLA.takeSV q svX
       svu           = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
       svb           = (smT SLA.## smS) SLA.#> svu
