@@ -271,9 +271,15 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
   let xTxMinusRzxTRzx =
         (LA.tr mX) LA.<> mX - (asDense $ (SLA.transposeSM smRzx) SLA.## smRzx)
   let smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
-      smUT = (SLA.transpose smLth -||- smRzx) -=- (SLA.zeroSM p q -||- smRx)
-      smLT = SLA.transpose smUT
-      svBu = (smP SLA.## smZSt) SLA.#> (toSparseVector vY)
+      upperTriangular r c _ = (r <= c)
+      smUT =
+        SLA.filterSM upperTriangular
+          $   (SLA.transpose smLth -||- smRzx)
+          -=- (SLA.zeroSM p q -||- smRx)
+--  SLA.prd smUT
+  let smLT = SLA.transpose smUT
+--  SLA.prd smLT
+  let svBu = (smP SLA.## smZSt) SLA.#> (toSparseVector vY)
       svBl = toSparseVector $ (LA.tr mX) LA.#> vY
   let svB =
         SLA.fromListSV (q + p)

@@ -48,7 +48,7 @@ verbose = True
 
 main :: IO ()
 main = do
-
+{-
   railFrame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let (vY, mX, (vRC, numInCat)) = FL.fold
         (lmePrepFrameOne (realToFrac . F.rgetField @Travel)
@@ -59,8 +59,8 @@ main = do
       levels =
         VB.fromList [(numInCat, True, Nothing :: Maybe (VB.Vector Bool))]
       th0 = LA.fromList [2]
+-}
 
-{-
   sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
     sleepStudyCSV
     (const True)
@@ -73,7 +73,7 @@ main = do
         sleepStudyFrame
       levels = VB.fromList [(numInCat, True, Just $ VB.fromList [False, True])]
       th0    = LA.fromList [2, 2, 0.1]
--}
+
 {-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
     oatsCSV
