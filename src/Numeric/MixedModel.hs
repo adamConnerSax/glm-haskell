@@ -231,7 +231,7 @@ makeSTF levels
 
 xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
 xTxPlusI smX =
-  (SLA.transposeSM smX) SLA.## smX SLA.^+^ (SLA.eye $ SLA.ncols smX)
+  (SLA.transposeSM smX SLA.## smX) SLA.^+^ (SLA.eye $ SLA.ncols smX)
 
 logDetTriangularSM :: RealFloat a => SLA.SpMatrix a -> a
 logDetTriangularSM smX =
@@ -259,8 +259,13 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
       n          = LA.size vY
       (_, p)     = LA.size mX
       (_, q)     = SLA.dim smZ
+      upperTriangular r c _ = (r <= c)
+      lowerTriangular r c _ = (r >= c)
   -- Cholesky factorize to get L_theta *and* update factor for solving with it
-  CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower $ xTxPlusI $ smZS
+  CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower
+    $ SLA.filterSM lowerTriangular
+    $ xTxPlusI
+    $ smZS
   -- compute Rzx
   let smZStX = smZSt SLA.## (toSparseMatrix mX)
   -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
@@ -271,14 +276,11 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
   let xTxMinusRzxTRzx =
         (LA.tr mX) LA.<> mX - (asDense $ (SLA.transposeSM smRzx) SLA.## smRzx)
   let smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
-      upperTriangular r c _ = (r <= c)
       smUT =
         SLA.filterSM upperTriangular
           $   (SLA.transpose smLth -||- smRzx)
           -=- (SLA.zeroSM p q -||- smRx)
---  SLA.prd smUT
   let smLT = SLA.transpose smUT
---  SLA.prd smLT
   let svBu = (smP SLA.## smZSt) SLA.#> (toSparseVector vY)
       svBl = toSparseVector $ (LA.tr mX) LA.#> vY
   let svB =
@@ -286,17 +288,17 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
           $  (SLA.toListSV svBu)
           ++ (fmap (\(i, x) -> (i + q, x)) (SLA.toListSV svBl))
   svX :: SLA.SpVector Double <- SLA.luSolve smLT smUT svB
-  let svPu          = SLA.takeSV q svX
-      svu           = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
-      svb           = (smT SLA.## smS) SLA.#> svu
-      vBeta         = asDenseV $ SLA.takeSV p $ SLA.dropSV q svX
-      vDev          = vY - (mX LA.#> vBeta) - (asDenseV $ smZS SLA.#> svu)
-      rTheta2       = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
-      logLth        = logDetTriangularSM smLth
-      (logDet, dof) = case dt of
+  let svPu    = SLA.takeSV q svX
+      svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
+      svb     = (smT SLA.## smS) SLA.#> svu
+      vBeta   = asDenseV $ SLA.takeSV p $ SLA.dropSV q svX
+      vDev    = vY - (mX LA.#> vBeta) - (asDenseV $ smZ SLA.#> svb)
+      rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
+  let logLth        = logDetTriangularSM smLth
+      (dof, logDet) = case dt of
         ML   -> (realToFrac n, logLth)
         REML -> (realToFrac (n - p), logLth + (logDetTriangularSM smRx))
-      pd = 2 * logDet + dof * (1 + (2 * pi * rTheta2 / dof))
+      pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
   return (pd, vBeta, asDenseV $ svb)
 
 
