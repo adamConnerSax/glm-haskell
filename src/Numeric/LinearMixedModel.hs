@@ -179,16 +179,19 @@ profiledDeviance cholmodC dt p q n smA cholmodF mkST th
       (d, ldL2, r, cholL)
 
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
-thetaLowerBounds :: Levels -> NL.Bounds
-thetaLowerBounds levels = NL.LowerBounds $ FL.fold fld levels
+setTheta :: Levels -> Double -> Double -> LA.Vector Double
+setTheta levels diag offDiag =  FL.fold fld levels
  where
   fld = FL.Fold
     (\bs l ->
       let e = effectsForLevel l
-      in  bs ++ L.replicate e 0 ++ replicate (e * (e - 1) `div` 2) (negate 1e5)
+      in  bs ++ L.replicate e diag ++ replicate (e * (e - 1) `div` 2) offDiag
     )
     []
     LA.fromList
+
+thetaLowerBounds :: Levels -> NL.Bounds
+thetaLowerBounds levels = NL.LowerBounds $ setTheta levels 0 (negate 1e5) --FL.fold fld levels
 
 minimizeDeviance
   :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)

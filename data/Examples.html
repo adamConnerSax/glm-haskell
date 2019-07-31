@@ -191,7 +191,7 @@ $(document).ready(function () {
 <div id="rails" class="section level2">
 <h2>Rails</h2>
 <p>Rails_ML &lt;- lmer(travel ~ 1 + (1 | Rail),Rail, REML=FALSE) Rails_ML</p>
-<p>SleepStudy_REML &lt;- lmer(Reaction ~ Days + (Days | Subject), sleepstudy)</p>
+<p>SleepStudy_REML &lt;- lmer(Reaction ~ Days + (Days | Subject), sleepstudy) REML_dev &lt;- as.function(SleepStudy_REML) thTest &lt;- c (1, 1, 0) REML_dev(thTest)</p>
 </div>
 
 
