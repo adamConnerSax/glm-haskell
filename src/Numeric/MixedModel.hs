@@ -187,6 +187,7 @@ checkProblem mX vY smZ = do
 
 -- S is the diagonal matrix of covariances in theta
 -- T is unit-lower-triangular of off-diagonal covariances
+-- this function produces a function mapping the vector theta to the matrix Lambda = ST
 makeSTF
   :: (Num a, VS.Storable a)
   => Levels
@@ -229,6 +230,33 @@ makeSTF levels
             (s, t, _, qT) = FL.fold fld makers
         in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
 
+-- For each level, i, with p_i random effects,
+-- Lambda is built from lower-triangular blocks
+-- which are p_i x p_i.  Theta contains the values
+-- for each block, diagonals first, then off diagonals,
+-- in col major order.
+makeLambda
+  :: (Num a, VS.Storable a)
+  => Levels
+  -> (LA.Vector a -> SLA.SpMatrix a)
+makeLambda levels =
+  let blockF vTH =
+        FL.Fold (\(bs, vx) l' -> ((l', vx) : bs,  VS.drop (effectsForLevel l') vx))
+        ([], vTH)
+        (reverse . fst)
+      blockData vTh = FL.fold (blockF vTh) levels
+      templateBlock l vTh = 
+        let pl = effectsForLevel l
+            lTh = VS.toList vTh
+            diags vx = fmap (\(x, v) -> (x, x, v)) $ zip (take pl $ L.iterate (+ 1) 0) vx
+            lts  vx =  fmap (\((r, c), v) -> (r, c, v)) $ zip
+              ([ (r, c) | c <- [0 .. (pl - 1)], r <- [(c + 1) .. (pl - 1)] ])
+              vx
+        in SLA.fromListSM (pl, pl) $ diags lTh ++ lts (drop pl lTh)
+      perLevel (l@(n,_,_), vx) = replicate n $ templateBlock l vx
+      allDiags vTh = concat $ fmap perLevel $ blockData vTh
+  in (\vTh -> SLA.fromBlocksDiag (allDiags vTh))
+
 xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
 xTxPlusI smX =
   (SLA.transposeSM smX SLA.## smX) SLA.^+^ (SLA.eye $ SLA.ncols smX)
@@ -244,17 +272,19 @@ profiledDeviance2
   -> CH.ForeignPtr CH.Factor -- ^ precomputed pattern work on Z
   -> SLA.SpMatrix Double -- ^ permutation matrix from above
   -> DevianceType
-  -> (  LA.Vector Double
-     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
-     ) -- ^ make S and T from theta
+  -> (LA.Vector Double -> SLA.SpMatrix Double) -- ^ Lambda
+--  -> (  LA.Vector Double
+--     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
+--     ) -- ^ make S and T from theta
   -> LA.Matrix Double -- ^ X
   -> LA.Vector Double -- ^ y
   -> SLA.SpMatrix Double -- ^ Z
   -> LA.Vector Double -- ^ theta
-  -> IO (Double, LA.Vector Double, LA.Vector Double) -- ^ (pd, beta, b) 
-profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
-  let (smS, smT) = mkST vTh
-      smZS       = smZ SLA.## (smT SLA.## smS)
+  -> IO (Double, LA.Vector Double, LA.Vector Double , LA.Vector Double) -- ^ (pd, beta, u, b) 
+profiledDeviance2 fpc fpf smP dt mkLambda mX vY smZ vTh = do
+  let -- (smS, smT) = mkST vTh
+      lambda = mkLambda vTh
+      smZS       = smZ SLA.## lambda --(smT SLA.## smS)
       smZSt      = SLA.transpose smZS
       n          = LA.size vY
       (_, p)     = LA.size mX
@@ -290,7 +320,7 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
   svX :: SLA.SpVector Double <- SLA.luSolve smLT smUT svB
   let svPu    = SLA.takeSV q svX
       svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
-      svb     = (smT SLA.## smS) SLA.#> svu
+      svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
       vBeta   = asDenseV $ SLA.takeSV p $ SLA.dropSV q svX
       vDev    = vY - (mX LA.#> vBeta) - (asDenseV $ smZ SLA.#> svb)
       rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
@@ -299,6 +329,6 @@ profiledDeviance2 fpc fpf smP dt mkST mX vY smZ vTh = do
         ML   -> (realToFrac n, logLth)
         REML -> (realToFrac (n - p), logLth + (logDetTriangularSM smRx))
       pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
-  return (pd, vBeta, asDenseV $ svb)
+  return (pd, vBeta, asDenseV $ svu, asDenseV $ svb)
 
 

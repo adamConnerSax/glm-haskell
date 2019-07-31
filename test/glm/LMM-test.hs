@@ -25,24 +25,6 @@ import qualified Data.Sequence                 as Seq
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 
-{-
-yV :: LA.Vector Double = LA.fromList $ L.take 20 $ L.iterate (+ 2) 0
---thV :: LA.Vector Double = LA.fromList [1, 1, 0.1, 2, 2, -0.1]
-
-xM :: LA.Matrix Double = LA.matrix 2 $ L.take 40 $ L.iterate (+ 1) 0
-levels :: VB.Vector (Int, Bool, Maybe (VB.Vector Bool)) =
-  VB.fromList [(10, True, Just $ VB.fromList [False, True])
---  , ( 2
---    , True
---    , Nothing {-Just $ VB.fromList [True, False]-}
---    )
-                                                           ]
-rows =
-  L.take 20 $ L.iterate (\[x, y] -> [(x + 1) `mod` 10, y + 1 `mod` 5]) [1, 0]
-rowClassifier n = fmap VB.fromList rows !! n
--}
-
-
 
 verbose = True
 
@@ -72,7 +54,7 @@ main = do
         )
         sleepStudyFrame
       levels = VB.fromList [(numInCat, True, Just $ VB.fromList [False, True])]
-      th0    = LA.fromList [2, 2, 0.1]
+      th0    = LA.fromList [1, 1, 0]
 
 {-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
@@ -162,17 +144,18 @@ main = do
       putStrLn $ "ML Random (b) =" ++ show (asDenseV b_ML)
     report p q levels vY mX smZ beta_ML b_ML
 
-    (th2_ML, pd2_ML, vBeta2_ML, vb2_ML) <- minimizeDeviance2 ML
+    (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance2 ML
                                                              levels
                                                              mX
                                                              vY
                                                              smZ
-                                                             makeST
+                                                             (makeLambda levels)
                                                              th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
       putStrLn $ "beta=" ++ show vBeta2_ML
+      putStrLn $ "u=" ++ show vu2_ML
       putStrLn $ "b=" ++ show vb2_ML
     report p
            q
@@ -208,17 +191,18 @@ main = do
       putStrLn $ "REML Random (b) =" ++ show (asDenseV b_REML)
     report p q levels vY mX smZ beta_REML b_REML
 
-    (th2_REML, pd2_REML, vBeta2_REML, vb2_REML) <- minimizeDeviance2 REML
+    (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance2 REML
                                                                      levels
                                                                      mX
                                                                      vY
                                                                      smZ
-                                                                     makeST
+                                                                     (makeLambda levels)
                                                                      th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
       putStrLn $ "beta=" ++ show vBeta2_REML
+      putStrLn $ "u=" ++ show vu2_REML
       putStrLn $ "b=" ++ show vb2_REML
     report p
            q

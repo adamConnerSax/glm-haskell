@@ -250,9 +250,10 @@ minimizeDeviance2
   -> LA.Matrix Double -- ^ X
   -> LA.Vector Double -- ^ y
   -> SLA.SpMatrix Double -- ^ Z
-  -> (  LA.Vector Double
-     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
-     ) -- ^ make S and T
+  -> (LA.Vector Double -> SLA.SpMatrix Double) -- ^ Lambda
+--  -> (  LA.Vector Double
+--     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
+--     ) -- ^ make S and T
   -> LA.Vector Double -- ^ initial guess for theta
   -> P.Sem
        r
@@ -260,8 +261,9 @@ minimizeDeviance2
        , Double
        , LA.Vector Double
        , LA.Vector Double
-       ) -- ^ (theta, beta, b)
-minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
+       , LA.Vector Double
+       ) -- ^ (theta, beta, u, b)
+minimizeDeviance2 dt levels mX vY smZ mkLambda th0 = do
   cholmodC <- liftIO CH.allocCommon
   liftIO $ CH.startC cholmodC
   liftIO $ CH.setFinalLL 1 cholmodC -- I don't quite get this.  We should be able to solve LDx = b either way??
@@ -271,9 +273,9 @@ minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
     $      SLA.transpose smZ
     SLA.## smZ
   let
-    pd x = profiledDeviance2 cholmodC cholmodF smP dt mkST mX vY smZ x
-    obj x = unsafePerformIO $ fmap (\(d, _, _) -> d) $ pd x
-    stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| []
+    pd x = profiledDeviance2 cholmodC cholmodF smP dt mkLambda mX vY smZ x
+    obj x = unsafePerformIO $ fmap (\(d, _, _, _) -> d) $ pd x
+    stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| [NL.ObjectiveAbsoluteTolerance 1e-6]
     thetaLB        = thetaLowerBounds levels
     algorithm      = NL.BOBYQA obj [thetaLB] Nothing
     problem        = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
@@ -298,15 +300,13 @@ minimizeDeviance2 dt levels mX vY smZ mkST th0 = do
   let eSol = NL.minimizeLocal problem th0
   case eSol of
     Left  result                       -> P.throw (T.pack $ show result)
-    Right (NL.Solution pdS thS result) -> do
-      liftIO
-        $  putStrLn
-        $  show "Solution ("
-        ++ show result
-        ++ ") reached! At th="
-      liftIO $ print thS
-      (pd, vBeta, vb) <- liftIO $ pd thS
-      return (thS, pd, vBeta, vb)
+    Right (NL.Solution pdS thS result) -> liftIO $ do
+      putStrLn $ "Solution (" ++ show result ++ ") reached! At th=" ++ show thS
+      putStrLn $ "Lambda(theta)="
+      LA.disp 2 $ asDense $ mkLambda thS
+
+      (pd, vBeta, vu, vb) <- pd thS
+      return (thS, pd, vBeta, vu, vb)
 
 
 
@@ -347,15 +347,15 @@ report p q levels vY mX smZ svBeta svb = do
   let
     vBeta = asDenseV svBeta
     vb    = asDenseV svb
-    reportMean0 prefix v = do
+    reportStats prefix v = do
       let mean = meanV v
-          var  = (v LA.<.> v) / (realToFrac $ LA.size v)
+          var  = let v' = LA.cmap (\x -> x -mean) v in (v' LA.<.> v') / (realToFrac $ LA.size v')
       putStrLn $ (T.unpack prefix) ++ ": mean (should be 0)=" ++ show mean
       putStrLn
         $  (T.unpack prefix)
-        ++ ": variance (assuming mean 0)="
+        ++ ": variance="
         ++ show var
-      putStrLn $ (T.unpack prefix) ++ ": std. dev (assuming mean 0)=" ++ show
+      putStrLn $ (T.unpack prefix) ++ ": std. dev=" ++ show
         (sqrt var)
     vEps = vY - ((mX LA.#> vBeta) + asDenseV (smZ SLA.#> svb))
     meanV v = LA.sumElements v / realToFrac (LA.size v)
@@ -363,17 +363,17 @@ report p q levels vY mX smZ svBeta svb = do
     varEps = vEps LA.<.> vEps -- assumes mEps is 0.  Which it should be!!                
     levelReport l@(n, b, _) b' = do
       putStrLn $ show n ++ " groups"
-      when b $ reportMean0 "Intercept" $ VS.take n b'
+      when b $ reportStats "Intercept" $ VS.take n b'
       let (numSlopes, bS) = case b of
             True  -> (effectsForLevel l - 1, VS.drop n b')
             False -> (effectsForLevel l, b')
       mapM_
-        (\s -> reportMean0 ("Slope " <> (T.pack $ show s))
+        (\s -> reportStats ("Slope " <> (T.pack $ show s))
                            (VS.take n $ VS.drop (n * s) bS)
         )
         [0 .. (numSlopes - 1)]
   liftIO $ putStrLn $ "p=" ++ show p ++ "; q=" ++ show q
-  liftIO $ reportMean0 "Residual" vEps
+  liftIO $ reportStats "Residual" vEps
   let numberedLevels = zip [0 ..] (VB.toList levels)
   liftIO $ mapM_
     (\(lN, l) -> putStrLn ("Level " ++ show lN) >> levelReport l vb)
