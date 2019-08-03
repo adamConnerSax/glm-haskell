@@ -280,40 +280,26 @@ profiledDeviance2
   -> RandomEffectCalculated
   -> CovarianceVector -- ^ theta
   -> IO (Double, LA.Vector Double, LA.Vector Double , LA.Vector Double) -- ^ (pd, beta, u, b) 
-profiledDeviance2 (fpc, fpf, smP)
+profiledDeviance2 cf
   dt
-  (MixedModel (RegressionModel mX vY) _)
-  (RandomEffectCalculated smZ mkLambda)
+  mm@(MixedModel (RegressionModel mX vY) _)
+  reCalc@(RandomEffectCalculated smZ mkLambda)
   vTh =
   do
-    let -- (smS, smT) = mkST vTh
+    let
+      n          = LA.size vY
+      (_, p)     = LA.size mX
+      (_, q)     = SLA.dim smZ      
       lambda = mkLambda vTh
       smZS       = smZ SLA.## lambda --(smT SLA.## smS)
       smZSt      = SLA.transpose smZS
-      n          = LA.size vY
-      (_, p)     = LA.size mX
-      (_, q)     = SLA.dim smZ
-      upperTriangular r c _ = (r <= c)
-      lowerTriangular r c _ = (r >= c)
-    -- Cholesky factorize to get L_theta *and* update factor for solving with it
-    CH.spMatrixFactorize fpc fpf CH.SquareSymmetricLower
-      $ SLA.filterSM lowerTriangular
-      $ xTxPlusI
-      $ smZS
-    -- compute Rzx
-    let smZStX = smZSt SLA.## (SD.toSparseMatrix mX)
-    -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
-    smPZStX <- CH.solveSparse fpc fpf CH.CHOLMOD_P smZStX -- P(Z*)'X
-    smRzx   <- CH.solveSparse fpc fpf CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
-    smLth   <- CH.choleskyFactorSM fpf fpc -- this has to happen after the solves because it unfactors the factor...
-  -- compute Rx
-    let xTxMinusRzxTRzx =
-          (LA.tr mX) LA.<> mX - (SD.toDenseMatrix $ (SLA.transposeSM smRzx) SLA.## smRzx)
-    let smRx = SD.toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
-        smUT =
-          SLA.filterSM upperTriangular
-          $   (SLA.transpose smLth -||- smRzx)
-          -=- (SLA.zeroSM p q -||- smRx)
+      (_, _, smP) = cf
+    CholeskyBlocks smLth smRzx smRx <- cholmodCholeskyBlocks cf mm reCalc vTh
+    let
+      smUT =
+        SLA.filterSM upperTriangular
+        $   (SLA.transpose smLth -||- smRzx)
+        -=- (SLA.zeroSM p q -||- smRx)
     let smLT = SLA.transpose smUT
     let svBu = (smP SLA.## smZSt) SLA.#> (SD.toSparseVector vY)
         svBl = SD.toSparseVector $ (LA.tr mX) LA.#> vY
@@ -335,4 +321,46 @@ profiledDeviance2 (fpc, fpf, smP)
         pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
     return (pd, vBeta, SD.toDenseVector $ svu, SD.toDenseVector $ svb)
 
+upperTriangular :: Int -> Int -> a -> Bool
+upperTriangular r c _ = (r <= c)
 
+lowerTriangular :: Int -> Int -> a -> Bool
+lowerTriangular r c _ = (r >= c)
+
+data CholeskyBlocks = CholeskyBlocks { lTheta :: SLA.SpMatrix Double
+                                     , rZX :: SLA.SpMatrix Double
+                                     , rX :: SLA.SpMatrix Double
+                                     } deriving (Show)
+
+cholmodCholeskyBlocks :: CholmodFactor
+                      -> MixedModel
+                      -> RandomEffectCalculated
+                      -> CovarianceVector
+                      -> IO CholeskyBlocks
+cholmodCholeskyBlocks cholmodFactor mixedModel randomEffCalcs vTh = do
+  let (cholmodC, cholmodF, smP) = cholmodFactor
+      (MixedModel (RegressionModel mX vY) levels) = mixedModel
+      (RandomEffectCalculated smZ mkLambda) = randomEffCalcs
+      lambda = mkLambda vTh
+      smZS       = smZ SLA.## lambda --(smT SLA.## smS)
+      smZSt      = SLA.transpose smZS
+      n          = LA.size vY
+      (_, p)     = LA.size mX
+      (_, q)     = SLA.dim smZ
+
+  -- Cholesky factorize to get L_theta *and* update factor for solving with it
+  CH.spMatrixFactorize cholmodC cholmodF CH.SquareSymmetricLower
+    $ SLA.filterSM lowerTriangular
+    $ xTxPlusI
+    $ smZS
+    -- compute Rzx
+  let smZStX = smZSt SLA.## (SD.toSparseMatrix mX)
+  -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
+  smPZStX <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smZStX -- P(Z*)'X
+  smRzx   <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
+  smLth   <- CH.choleskyFactorSM cholmodF cholmodC -- this has to happen after the solves because it unfactors the factor...
+  -- compute Rx
+  let xTxMinusRzxTRzx =
+        (LA.tr mX) LA.<> mX - (SD.toDenseMatrix $ (SLA.transposeSM smRzx) SLA.## smRzx)
+      smRx = SD.toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
+  return $ CholeskyBlocks smLth smRzx smRx 
