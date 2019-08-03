@@ -58,7 +58,7 @@ data RegressionModel = RegressionModel FixedPredictors Observations
 data LevelSpec = LevelSpec { nCategories :: Int
                            , groupIntercept :: Bool
                            , groupSlopes :: Maybe (VB.Vector Bool)
-                           } -- (Int, Bool, Maybe (VB.Vector Bool)) -- level sizes and effects
+                           } deriving (Show, Eq)
 
 type Levels = VB.Vector LevelSpec
 
@@ -89,12 +89,24 @@ type RowClassifier = Int -> VB.Vector Int
 
 --type LevelEffectsSpec = [(Bool, Maybe (LA.Vector Bool))]
 
-type SemC r = (MonadIO (P.Sem r), {- P.Member (P.Error SomeException) r,-} P.Member (P.Error T.Text) r)
+type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
 runPIRLS_M
   :: P.Sem '[{-P.Error SomeException,-}
              P.Error T.Text, P.Lift IO] a
   -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
+
+setCovarianceVector :: Levels -> Double -> Double -> LA.Vector Double
+setCovarianceVector levels diag offDiag =  FL.fold fld levels
+ where
+  fld = FL.Fold
+    (\bs l ->
+      let e = effectsForLevel l
+      in  bs ++ L.replicate e diag ++ replicate (e * (e - 1) `div` 2) offDiag
+    )
+    []
+    LA.fromList
+
 
 makeZ
   :: FixedPredictors
@@ -142,7 +154,7 @@ makeZ mX levels rc =
             Just vb -> zEntriesForSlope newStartI level vb
       in  (interceptZs <> slopeZs, newStartS)
     zFold = FL.Fold
-      (\(LevelSpec zs sc l) x ->
+      (\(zs, sc, l) x ->
         let (newZs, newStart) = zEntriesForLevel sc l x
         in  (zs <> newZs, newStart, l + 1)
       )
@@ -154,10 +166,10 @@ makeZ mX levels rc =
 
 -- TODO: Add levels checks
 -- TODO: Add Lambda checks
-checkProblem :: MixedModel
+checkProblem :: SemC r => MixedModel
              -> RandomEffectCalculated
              -> P.Sem r ()
-checkProblem (MixedModel (RegressionModel vY mX) _) (RandomEffectCalculated smZ _)  = do
+checkProblem (MixedModel (RegressionModel mX vY) _) (RandomEffectCalculated smZ _)  = do
   let (n, p)     = LA.size mX
       yRows      = LA.size vY
       (zRows, q) = SLA.dim smZ
@@ -242,7 +254,7 @@ makeLambda levels =
               ([ (r, c) | c <- [0 .. (pl - 1)], r <- [(c + 1) .. (pl - 1)] ])
               vx
         in SLA.fromListSM (pl, pl) $ diags lTh ++ lts (drop pl lTh)
-      perLevel (l@(n,_,_), vx) = replicate n $ templateBlock l vx
+      perLevel (l, vx) = replicate (nCategories l) $ templateBlock l vx
       allDiags vTh = concat $ fmap perLevel $ blockData vTh
   in (\vTh -> SLA.fromBlocksDiag (allDiags vTh))
 
@@ -266,12 +278,12 @@ profiledDeviance2
   -> DevianceType
   -> MixedModel
   -> RandomEffectCalculated
-  -> LA.Vector Double -- ^ theta
+  -> CovarianceVector -- ^ theta
   -> IO (Double, LA.Vector Double, LA.Vector Double , LA.Vector Double) -- ^ (pd, beta, u, b) 
 profiledDeviance2 (fpc, fpf, smP)
   dt
   (MixedModel (RegressionModel mX vY) _)
-  (RandomEffectCalculated smZ mkLamda)
+  (RandomEffectCalculated smZ mkLambda)
   vTh =
   do
     let -- (smS, smT) = mkST vTh
@@ -289,22 +301,22 @@ profiledDeviance2 (fpc, fpf, smP)
       $ xTxPlusI
       $ smZS
     -- compute Rzx
-    let smZStX = smZSt SLA.## (toSparseMatrix mX)
+    let smZStX = smZSt SLA.## (SD.toSparseMatrix mX)
     -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
     smPZStX <- CH.solveSparse fpc fpf CH.CHOLMOD_P smZStX -- P(Z*)'X
     smRzx   <- CH.solveSparse fpc fpf CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
     smLth   <- CH.choleskyFactorSM fpf fpc -- this has to happen after the solves because it unfactors the factor...
   -- compute Rx
     let xTxMinusRzxTRzx =
-          (LA.tr mX) LA.<> mX - (asDense $ (SLA.transposeSM smRzx) SLA.## smRzx)
-    let smRx = toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
+          (LA.tr mX) LA.<> mX - (SD.toDenseMatrix $ (SLA.transposeSM smRzx) SLA.## smRzx)
+    let smRx = SD.toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
         smUT =
           SLA.filterSM upperTriangular
           $   (SLA.transpose smLth -||- smRzx)
           -=- (SLA.zeroSM p q -||- smRx)
     let smLT = SLA.transpose smUT
-    let svBu = (smP SLA.## smZSt) SLA.#> (toSparseVector vY)
-        svBl = toSparseVector $ (LA.tr mX) LA.#> vY
+    let svBu = (smP SLA.## smZSt) SLA.#> (SD.toSparseVector vY)
+        svBl = SD.toSparseVector $ (LA.tr mX) LA.#> vY
     let svB =
           SLA.fromListSV (q + p)
           $  (SLA.toListSV svBu)
@@ -313,14 +325,14 @@ profiledDeviance2 (fpc, fpf, smP)
     let svPu    = SLA.takeSV q svX
         svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
         svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
-        vBeta   = asDenseV $ SLA.takeSV p $ SLA.dropSV q svX
-        vDev    = vY - (mX LA.#> vBeta) - (asDenseV $ smZ SLA.#> svb)
+        vBeta   = SD.toDenseVector $ SLA.takeSV p $ SLA.dropSV q svX
+        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZ SLA.#> svb)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
     let logLth        = logDetTriangularSM smLth
         (dof, logDet) = case dt of
           ML   -> (realToFrac n, logLth)
           REML -> (realToFrac (n - p), logLth + (logDetTriangularSM smRx))
         pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
-    return (pd, vBeta, asDenseV $ svu, asDenseV $ svb)
+    return (pd, vBeta, SD.toDenseVector $ svu, SD.toDenseVector $ svb)
 
 

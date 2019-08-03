@@ -12,6 +12,7 @@ module Numeric.LinearMixedModel
 where
 
 import           Numeric.MixedModel
+import qualified Numeric.SparseDenseConversions as SD
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
                                                as CH
 
@@ -60,17 +61,15 @@ Z is n x q
 zTz is q x q, this is the part that will be sparse.
 -}
 makeA
-  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
-  => LA.Matrix a -- ^ X
-  -> LA.Vector a -- ^ y
-  -> SLA.SpMatrix a -- ^ Z 
-  -> SLA.SpMatrix a
-makeA mX vY smZ =
+  :: MixedModel
+  -> RandomEffectCalculated
+  -> SLA.SpMatrix Double
+makeA (MixedModel (RegressionModel mX vY) _)  (RandomEffectCalculated smZ _) =
   let (n, p)     = LA.size mX
       yRows      = LA.size vY
       (zRows, q) = SLA.dim smZ
-      smX        = toSparseMatrix mX
-      svY        = toSparseVector vY
+      smX        = SD.toSparseMatrix mX
+      svY        = SD.toSparseVector vY
       zTz        = smZ SLA.#^# smZ
       zTx        = smZ SLA.#^# smX
       xTz        = smX SLA.#^# smZ
@@ -87,13 +86,12 @@ makeA mX vY smZ =
 
 
 makeAStar
-  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
-  => Int -- ^ p (cols of X)
+  :: Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z) 
-  -> SLA.SpMatrix a -- ^ A
-  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
-  -> LA.Vector a -- ^ theta
-  -> SLA.SpMatrix a
+  -> SLA.SpMatrix Double -- ^ A
+  -> (LA.Vector Double -> (SLA.SpMatrix Double, SLA.SpMatrix Double))
+  -> CovarianceVector -- ^ theta
+  -> SLA.SpMatrix Double
 makeAStar p q smA mkST vTh =
   let (smS, smT) = mkST vTh
       tTs        = smT #^# smS
@@ -114,22 +112,22 @@ makeAStar p q smA mkST vTh =
 
 
 makeAStar'
-  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
-  => LA.Matrix a  -- ^ X
-  -> LA.Vector a -- ^ y
-  -> SLA.SpMatrix a -- ^ Z
-  -> (LA.Vector a -> P.Sem r (SLA.SpMatrix a, SLA.SpMatrix a))
-  -> LA.Vector a -- ^ theta
-  -> P.Sem r (SLA.SpMatrix a)
+  :: SemC r
+  => LA.Matrix Double  -- ^ X
+  -> LA.Vector Double -- ^ y
+  -> SLA.SpMatrix Double -- ^ Z
+  -> (CovarianceVector-> P.Sem r (SLA.SpMatrix Double, SLA.SpMatrix Double))
+  -> CovarianceVector -- ^ theta
+  -> P.Sem r (SLA.SpMatrix Double)
 makeAStar' mX vY smZ mkST vTh = do
   (smS, smT) <- mkST vTh
-  let smX    = toSparseMatrix mX
-      svY    = toSparseVector vY
+  let smX    = SD.toSparseMatrix mX
+      svY    = SD.toSparseVector vY
       (_, q) = SLA.dim smZ
       smZS   = smZ ## smT ## smS
   liftIO $ do
     putStrLn "Z*="
-    LA.disp 2 $ asDense smZS
+    LA.disp 2 $ SD.toDenseMatrix smZS
   let zsTzs  = smZS #^# smZS
       zsTx   = smZS #^# smX
       xTzs   = smX #^# smZS
@@ -148,18 +146,16 @@ makeAStar' mX vY smZ mkST vTh = do
 
 -- since A* is (p + q + 1) x (p + q + 1) so is L
 profiledDeviance
-  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double)
-  => CH.ForeignPtr CH.Common
+  :: CholmodFactor
   -> DevianceType
   -> Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z)
   -> Int -- ^ n (rows of X or Z)
-  -> SLA.SpMatrix a -- ^ A
-  -> CH.ForeignPtr CH.Factor
-  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
-  -> LA.Vector a -- ^ theta
-  -> (a, a, a, SLA.SpMatrix a)
-profiledDeviance cholmodC dt p q n smA cholmodF mkST th
+  -> SLA.SpMatrix Double -- ^ A
+    -> (CovarianceVector -> (SLA.SpMatrix Double, SLA.SpMatrix Double))
+  -> CovarianceVector -- ^ theta
+  -> (Double, Double, Double, SLA.SpMatrix Double)
+profiledDeviance (cholmodC, cholmodF, _) dt p q n smA mkST th
   = let
       smAS = makeAStar p q smA mkST th
       cholL =
@@ -178,36 +174,27 @@ profiledDeviance cholmodC dt p q n smA cholmodF mkST th
     in
       (d, ldL2, r, cholL)
 
--- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
-setTheta :: Levels -> Double -> Double -> LA.Vector Double
-setTheta levels diag offDiag =  FL.fold fld levels
- where
-  fld = FL.Fold
-    (\bs l ->
-      let e = effectsForLevel l
-      in  bs ++ L.replicate e diag ++ replicate (e * (e - 1) `div` 2) offDiag
-    )
-    []
-    LA.fromList
 
+
+-- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
 thetaLowerBounds :: Levels -> NL.Bounds
-thetaLowerBounds levels = NL.LowerBounds $ setTheta levels 0 (negate 1e5) --FL.fold fld levels
+thetaLowerBounds levels = NL.LowerBounds $ setCovarianceVector levels 0 (negate 1e5) --FL.fold fld levels
 
 minimizeDeviance
-  :: (LA.Container LA.Vector a, RealFrac a, SemC r, a ~ Double)
+  :: SemC r
   => DevianceType
   -> Int -- ^ p (cols of X)
   -> Int -- ^ q (cols of Z)
   -> Int -- ^ n (rows of X or Z)
   -> Levels
-  -> SLA.SpMatrix a -- ^ A
-  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a))
-  -> LA.Vector a -- ^ initial guess for theta
+  -> SLA.SpMatrix Double -- ^ A
+  -> (CovarianceVector -> (SLA.SpMatrix Double, SLA.SpMatrix Double))
+  -> CovarianceVector -- ^ initial guess for theta
   -> P.Sem
        r
-       ( LA.Vector a
-       , SLA.SpMatrix a
-       , (a, a, a, SLA.SpMatrix a)
+       ( LA.Vector Double
+       , SLA.SpMatrix Double
+       , (Double, Double, Double, SLA.SpMatrix Double)
        )
 minimizeDeviance dt p q n levels smA mkST th0 = do
   cholmodC <- liftIO CH.allocCommon
@@ -215,7 +202,7 @@ minimizeDeviance dt p q n levels smA mkST th0 = do
   (cholmodF, permSM) <- liftIO
     $ CH.spMatrixAnalyze cholmodC CH.SquareSymmetricLower smA
   let
-    pd x = profiledDeviance cholmodC dt p q n smA cholmodF mkST x
+    pd x = profiledDeviance (cholmodC, cholmodF, permSM) dt p q n smA mkST x
     obj x = (\(d, _, _, _) -> d) $ pd x
     stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| []
     thetaLB        = thetaLowerBounds levels
@@ -249,24 +236,18 @@ minimizeDeviance dt p q n levels smA mkST th0 = do
 minimizeDeviance2
   :: SemC r
   => DevianceType
-  -> Levels
-  -> LA.Matrix Double -- ^ X
-  -> LA.Vector Double -- ^ y
-  -> SLA.SpMatrix Double -- ^ Z
-  -> (LA.Vector Double -> SLA.SpMatrix Double) -- ^ Lambda
---  -> (  LA.Vector Double
---     -> (SLA.SpMatrix Double, SLA.SpMatrix Double)
---     ) -- ^ make S and T
-  -> LA.Vector Double -- ^ initial guess for theta
+  -> MixedModel
+  -> RandomEffectCalculated
+  -> CovarianceVector -- ^ initial guess for theta
   -> P.Sem
        r
-       ( LA.Vector Double
-       , Double
-       , LA.Vector Double
-       , LA.Vector Double
-       , LA.Vector Double
-       ) -- ^ (theta, beta, u, b)
-minimizeDeviance2 dt levels mX vY smZ mkLambda th0 = do
+       ( LA.Vector Double 
+       , Double 
+       , LA.Vector Double 
+       , LA.Vector Double 
+       , LA.Vector Double 
+       ) -- ^ (theta, profiled_deviance, beta, u, b)
+minimizeDeviance2 dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0 = do
   cholmodC <- liftIO CH.allocCommon
   liftIO $ CH.startC cholmodC
   liftIO $ CH.setFinalLL 1 cholmodC -- I don't quite get this.  We should be able to solve LDx = b either way??
@@ -276,7 +257,10 @@ minimizeDeviance2 dt levels mX vY smZ mkLambda th0 = do
     $      SLA.transpose smZ
     SLA.## smZ
   let
-    pd x = profiledDeviance2 cholmodC cholmodF smP dt mkLambda mX vY smZ x
+    pd x = profiledDeviance2 (cholmodC, cholmodF, smP) dt
+           mixedModel
+           reCalc
+           x
     obj x = unsafePerformIO $ fmap (\(d, _, _, _) -> d) $ pd x
     stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| [NL.ObjectiveAbsoluteTolerance 1e-6]
     thetaLB        = thetaLowerBounds levels
@@ -306,12 +290,10 @@ minimizeDeviance2 dt levels mX vY smZ mkLambda th0 = do
     Right (NL.Solution pdS thS result) -> liftIO $ do
       putStrLn $ "Solution (" ++ show result ++ ") reached! At th=" ++ show thS
       putStrLn $ "Lambda(theta)="
-      LA.disp 2 $ asDense $ mkLambda thS
+      LA.disp 2 $ SD.toDenseMatrix $ mkLambda thS
 
       (pd, vBeta, vu, vb) <- pd thS
       return (thS, pd, vBeta, vu, vb)
-
-
 
 parametersFromSolution
   :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
@@ -348,8 +330,8 @@ report
   -> P.Sem r ()
 report p q levels vY mX smZ svBeta svb = do
   let
-    vBeta = asDenseV svBeta
-    vb    = asDenseV svb
+    vBeta = SD.toDenseVector svBeta
+    vb    = SD.toDenseVector svb
     reportStats prefix v = do
       let mean = meanV v
           var  = let v' = LA.cmap (\x -> x -mean) v in (v' LA.<.> v') / (realToFrac $ LA.size v')
@@ -360,11 +342,11 @@ report p q levels vY mX smZ svBeta svb = do
         ++ show var
       putStrLn $ (T.unpack prefix) ++ ": std. dev=" ++ show
         (sqrt var)
-    vEps = vY - ((mX LA.#> vBeta) + asDenseV (smZ SLA.#> svb))
+    vEps = vY - ((mX LA.#> vBeta) + SD.toDenseVector (smZ SLA.#> svb))
     meanV v = LA.sumElements v / realToFrac (LA.size v)
     mEps   = meanV vEps --LA.sumElements vEps / realToFrac (LA.size vEps)
     varEps = vEps LA.<.> vEps -- assumes mEps is 0.  Which it should be!!                
-    levelReport l@(n, b, _) b' = do
+    levelReport l@(LevelSpec n b _) b' = do
       putStrLn $ show n ++ " groups"
       when b $ reportStats "Intercept" $ VS.take n b'
       let (numSlopes, bS) = case b of
