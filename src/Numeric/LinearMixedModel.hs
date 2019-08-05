@@ -299,27 +299,6 @@ minimizeDeviance2 verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEf
         (pd, vBeta, vu, vb) <- pd thS
         return (thS, pd, vBeta, vu, vb)
 
-parametersFromSolution
-  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
-  => DevianceType -- ^ unused for now??
-  -> Int
-  -> Int
-  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ makeST
-  -> LA.Vector a -- ^ solution theta
-  -> (SLA.SpMatrix a, SLA.SpMatrix a) -- ^ solution (P,L)
-  -> a -- ^ solution r
-  -> P.Sem
-       r
-       (SLA.SpVector a, SLA.SpVector a, SLA.SpVector a) -- ^ beta, b and b* (also called u)                       
-parametersFromSolution dt p q makeST th (permSM, ldL) r = do
-  let sv :: SLA.SpVector Double =
-        SLA.fromListDenseSV (p + q + 1) $ L.replicate (p + q) 0 ++ [r]
-  solV <- liftIO $ SLA.triUpperSolve (SLA.transposeSM ldL SLA.## permSM) sv
-  let bStar  = SLA.takeSV q $ solV
-      beta   = SLA.takeSV p $ SLA.dropSV q $ solV
-      (s, t) = makeST th
-      b      = (t SLA.## s) SLA.#> bStar
-  return (beta, b, bStar)
 
 report
   :: (LA.Container LA.Vector Double, SemC r)
@@ -365,3 +344,27 @@ report p q levels vY mX smZ svBeta svb = do
   liftIO $ mapM_
     (\(lN, l) -> putStrLn ("Level " ++ show lN) >> levelReport l vb)
     numberedLevels
+
+---
+
+parametersFromSolution
+  :: (LA.Container LA.Vector a, RealFrac a, a ~ Double, SemC r)
+  => DevianceType -- ^ unused for now??
+  -> Int
+  -> Int
+  -> (LA.Vector a -> (SLA.SpMatrix a, SLA.SpMatrix a)) -- ^ makeST
+  -> LA.Vector a -- ^ solution theta
+  -> (SLA.SpMatrix a, SLA.SpMatrix a) -- ^ solution (P,L)
+  -> a -- ^ solution r
+  -> P.Sem
+       r
+       (SLA.SpVector a, SLA.SpVector a, SLA.SpVector a) -- ^ beta, b and b* (also called u)                       
+parametersFromSolution dt p q makeST th (permSM, ldL) r = do
+  let sv :: SLA.SpVector Double =
+        SLA.fromListDenseSV (p + q + 1) $ L.replicate (p + q) 0 ++ [r]
+  solV <- liftIO $ SLA.triUpperSolve (SLA.transposeSM ldL SLA.## permSM) sv
+  let bStar  = SLA.takeSV q $ solV
+      beta   = SLA.takeSV p $ SLA.dropSV q $ solV
+      (s, t) = makeST th
+      b      = (t SLA.## s) SLA.#> bStar
+  return (beta, b, bStar)

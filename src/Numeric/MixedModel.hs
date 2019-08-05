@@ -22,6 +22,7 @@ import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
+import qualified Data.Sparse.Common            as SLA
 import qualified Numeric.LinearAlgebra.Class   as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
 import           Numeric.LinearAlgebra.Sparse   ( (##)
@@ -198,49 +199,6 @@ checkProblem (MixedModel (RegressionModel mX vY) _) (RandomEffectCalculated smZ 
     return ()
 
 
--- S is the diagonal matrix of covariances in theta
--- T is unit-lower-triangular of off-diagonal covariances
--- this function produces a function mapping the vector theta to the matrix Lambda = ST
-makeSTF
-  :: Levels -> (CovarianceVector -> (SLA.SpMatrix Double, SLA.SpMatrix Double))
-makeSTF levels
-  = let
-      f
-        :: Num a
-        => LevelSpec
-        -> ([a] -> [(Int, Int, a)], [a] -> [(Int, Int, a)], Int, Int)
-      f l@(LevelSpec n _ _) =
-        let
-          e = effectsForLevel l
-          s' th =
-            fmap (\(x, v) -> (x, x, v)) $ zip (take e $ L.iterate (+ 1) 0) th
-          tlt' th = fmap (\((r, c), v) -> (r, c, v)) $ zip
-            ([ (r, c) | c <- [0 .. (e - 1)], r <- [(c + 1) .. (e - 1)] ])
-            th
-          t' th =
-            tlt' th ++ fmap (\x -> (x, x, 1)) (L.take e $ L.iterate (+ 1) 0)
-        in
-          (s', t', e, n)
-      makers = fmap f levels
-      diagOffset o = fmap (\(r, c, v) -> (r + o, c + o, v))
-      diagCopiesFrom i e n ivs =
-        mconcat $ fmap (flip diagOffset ivs) $ L.take n $ L.iterate (+ e) i
-    in
-      \thV ->
-        let thL = LA.toList thV
-            fld = FL.Fold
-              (\(sL, tL, thL', offset) (s', t', e, n) ->
-                ( sL ++ diagCopiesFrom offset e n (s' thL')
-                , tL ++ diagCopiesFrom offset e n (t' $ L.drop e thL')
-                , L.drop (e + (e * (e - 1) `div` 2)) thL'
-                , offset + (e * n)
-                )
-              )
-              ([], [], thL, 0)
-              id
-            (s, t, _, qT) = FL.fold fld makers
-        in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
-
 -- For each level, i, with p_i random effects,
 -- Lambda is built from lower-triangular blocks
 -- which are p_i x p_i.  Theta contains the values
@@ -315,7 +273,11 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
         smZS        = smZ SLA.## lambda --(smT SLA.## smS)
         smZSt       = SLA.transpose smZS
         (_, _, smP) = cf
-    CholeskyBlocks smLth smRzx smRx <- cholmodCholeskyBlocks cf mm reCalc vTh
+    CholeskySolutions smLth smRzx smRx svBeta svu <- cholmodCholeskySolutions
+      cf
+      mm
+      reCalc
+      vTh
     when (verbosity == PDVAll) $ do
       putStrLn "Z"
       LA.disp 2 $ SD.toDenseMatrix smZ
@@ -327,6 +289,7 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
       LA.disp 2 $ SD.toDenseMatrix smRzx
       putStrLn "Rx"
       LA.disp 2 $ SD.toDenseMatrix smRx
+{-
     let smUT =
           SLA.filterSM upperTriangular
             $   (SLA.transpose smLth -||- smRzx)
@@ -341,8 +304,10 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
     svX :: SLA.SpVector Double <- SLA.luSolve smLT smUT svB
     let svPu    = SLA.takeSV q svX
         svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
-        svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
-        vBeta   = SD.toDenseVector $ SLA.takeSV p $ SLA.dropSV q svX
+-}
+    let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
+        vBeta   = SD.toDenseVector svBeta
+--        vBeta   = SD.toDenseVector $ SLA.takeSV p $ SLA.dropSV q svX
         vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZ SLA.#> svb)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
     let logLth        = logDetTriangularSM smLth
@@ -360,18 +325,20 @@ upperTriangular r c _ = (r <= c)
 lowerTriangular :: Int -> Int -> a -> Bool
 lowerTriangular r c _ = (r >= c)
 
-data CholeskyBlocks = CholeskyBlocks { lTheta :: SLA.SpMatrix Double
-                                     , rZX :: SLA.SpMatrix Double
-                                     , rX :: SLA.SpMatrix Double
-                                     } deriving (Show)
+data CholeskySolutions = CholeskySolutions { lTheta :: SLA.SpMatrix Double
+                                           , rZX :: SLA.SpMatrix Double
+                                           , rX :: SLA.SpMatrix Double
+                                           , svBeta :: SLA.SpVector Double
+                                           , svu :: SLA.SpVector Double
+                                           } deriving (Show)
 
-cholmodCholeskyBlocks
+cholmodCholeskySolutions
   :: CholmodFactor
   -> MixedModel
   -> RandomEffectCalculated
   -> CovarianceVector
-  -> IO CholeskyBlocks
-cholmodCholeskyBlocks cholmodFactor mixedModel randomEffCalcs vTh = do
+  -> IO CholeskySolutions
+cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
   let (cholmodC, cholmodF, smP) = cholmodFactor
       (MixedModel             (RegressionModel mX vY) levels  ) = mixedModel
       (RandomEffectCalculated smZ                     mkLambda) = randomEffCalcs
@@ -391,17 +358,27 @@ cholmodCholeskyBlocks cholmodFactor mixedModel randomEffCalcs vTh = do
   let smZStX = smZSt SLA.## (SD.toSparseMatrix mX)
   -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
   smPZStX <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smZStX -- P(Z*)'X
-  smRzx   <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
+  let svZSty = smZSt SLA.#> SD.toSparseVector vY
+  svCu <- SLA.toSV
+    <$> CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD (SLA.svToSM svZSty)
+  smRzx <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
+  --  let smRxTRx = (SD.toSparseMatrix $ LA.tr mX LA.<> mX) SLA.^-^ (SLA.transposeSM smRzx SLA.## smRzx)
+  --      beta = SLA.luSolve (SD.toSparseVector (mX LA.#> vY) SLA.^-^ (smRzx SLA.#> svCu)
+  -- compute Rx
+  let
+    xTxMinusRzxTRzx =
+      (LA.tr mX) LA.<> mX - (SD.toDenseMatrix $ smRzx SLA.#^# smRzx)
+    smRx = SD.toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
+    svXtyMinusRzxCu =
+      (SD.toSparseVector (mX LA.#> vY)) SLA.^-^ (smRzx SLA.#> svCu)
+  svBeta <- SLA.luSolve smRx (SLA.transposeSM smRx) svXtyMinusRzxCu
+  svPu   <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Lt
+    $ SLA.svToSM (svCu SLA.^-^ (smRzx SLA.#> svBeta))
+  svu   <- SLA.toSV <$> (CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Pt $ svPu)
   -- NB: This has to happen after the solves because it unfactors the factor...
   -- NB: It does *not* undo the analysis
-  smLth   <- CH.choleskyFactorSM cholmodF cholmodC
-  -- compute Rx
-  let xTxMinusRzxTRzx =
-        (LA.tr mX)
-          LA.<> mX
-          -     (SD.toDenseMatrix $ (SLA.transposeSM smRzx) SLA.## smRzx)
-      smRx = SD.toSparseMatrix $ LA.chol $ LA.trustSym $ xTxMinusRzxTRzx
-  return $ CholeskyBlocks smLth smRzx smRx
+  smLth <- CH.choleskyFactorSM cholmodF cholmodC
+  return $ CholeskySolutions smLth smRzx smRx svBeta svu
 
 
 ---
@@ -457,3 +434,48 @@ makeZ_Old mX levels rc =
     (zEntries, numCols, _) = FL.fold zFold levels
   in
     SLA.fromListSM (nO, q) zEntries
+
+
+
+-- S is the diagonal matrix of covariances in theta
+-- T is unit-lower-triangular of off-diagonal covariances
+-- this function produces a function mapping the vector theta to the matrix Lambda = ST
+makeSTF
+  :: Levels -> (CovarianceVector -> (SLA.SpMatrix Double, SLA.SpMatrix Double))
+makeSTF levels
+  = let
+      f
+        :: Num a
+        => LevelSpec
+        -> ([a] -> [(Int, Int, a)], [a] -> [(Int, Int, a)], Int, Int)
+      f l@(LevelSpec n _ _) =
+        let
+          e = effectsForLevel l
+          s' th =
+            fmap (\(x, v) -> (x, x, v)) $ zip (take e $ L.iterate (+ 1) 0) th
+          tlt' th = fmap (\((r, c), v) -> (r, c, v)) $ zip
+            ([ (r, c) | c <- [0 .. (e - 1)], r <- [(c + 1) .. (e - 1)] ])
+            th
+          t' th =
+            tlt' th ++ fmap (\x -> (x, x, 1)) (L.take e $ L.iterate (+ 1) 0)
+        in
+          (s', t', e, n)
+      makers = fmap f levels
+      diagOffset o = fmap (\(r, c, v) -> (r + o, c + o, v))
+      diagCopiesFrom i e n ivs =
+        mconcat $ fmap (flip diagOffset ivs) $ L.take n $ L.iterate (+ e) i
+    in
+      \thV ->
+        let thL = LA.toList thV
+            fld = FL.Fold
+              (\(sL, tL, thL', offset) (s', t', e, n) ->
+                ( sL ++ diagCopiesFrom offset e n (s' thL')
+                , tL ++ diagCopiesFrom offset e n (t' $ L.drop e thL')
+                , L.drop (e + (e * (e - 1) `div` 2)) thL'
+                , offset + (e * n)
+                )
+              )
+              ([], [], thL, 0)
+              id
+            (s, t, _, qT) = FL.fold fld makers
+        in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)
