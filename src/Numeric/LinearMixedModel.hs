@@ -181,7 +181,8 @@ profiledDeviance (cholmodC, cholmodF, _) dt p q n smA mkST th
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
 thetaLowerBounds :: Levels -> NL.Bounds
 thetaLowerBounds levels =
-  NL.LowerBounds $ setCovarianceVector levels 0 (negate $ 1 / 0) --FL.fold fld levels
+  let negInfinity :: Double = negate $ 1 / 0
+  in  NL.LowerBounds $ setCovarianceVector levels 0 negInfinity --FL.fold fld levels
 
 minimizeDeviance
   :: SemC r
@@ -269,7 +270,7 @@ minimizeDeviance2 verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEf
       pd x =
         profiledDeviance2 pdv (cholmodC, cholmodF, smP) dt mixedModel reCalc x
       obj x = unsafePerformIO $ fmap (\(d, _, _, _) -> d) $ pd x
-      stop           = NL.ObjectiveAbsoluteTolerance 1e-8 NL.:| []
+      stop           = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
       thetaLB        = thetaLowerBounds levels
       algorithm      = NL.BOBYQA obj [thetaLB] Nothing
       problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
@@ -286,11 +287,6 @@ minimizeDeviance2 verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEf
       <> " entries but should have "
       <> (T.pack $ show expThetaLength)
       <> "."
-  {-  liftIO $ do
-    (pd, vBeta, vb) <- pd th0
-    putStrLn $ "pd=" ++ show pd
-    putStrLn $ "vBeta=" ++ show pd
-    putStrLn $ "vb=" ++ show pd -}
     let eSol = NL.minimizeLocal problem th0
     case eSol of
       Left  result                       -> P.throw (T.pack $ show result)
@@ -300,9 +296,6 @@ minimizeDeviance2 verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEf
           ++ show result
           ++ ") reached! At th="
           ++ show thS
-        putStrLn $ "Lambda(theta)="
-        LA.disp 2 $ SD.toDenseMatrix $ mkLambda thS
-
         (pd, vBeta, vu, vb) <- pd thS
         return (thS, pd, vBeta, vu, vb)
 

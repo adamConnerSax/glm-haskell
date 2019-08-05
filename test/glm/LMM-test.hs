@@ -39,11 +39,10 @@ main = do
                          (F.rgetField @Rail)
         )
         railFrame
-      levels =
-        VB.fromList [LevelSpec numInCat True Nothing]
-      th0 = setCovarianceVector levels 1 0 -- LA.fromList [2]
+      levels = VB.fromList [LevelSpec numInCat True Nothing]
+      th0    = setCovarianceVector levels 1 0 -- LA.fromList [2]
 -}
-
+{-
   sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
     sleepStudyCSV
     (const True)
@@ -57,8 +56,8 @@ main = do
       levels = VB.fromList
         [LevelSpec numInCat True (Just $ VB.fromList [False, True])]
       th0 = setCovarianceVector levels 1 0 --LA.fromList [1, 1, 0]
+-}
 
-{-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
     oatsCSV
     (const True)
@@ -66,14 +65,14 @@ main = do
         (lmePrepFrameTwo
           (realToFrac . F.rgetField @Yield)
           ((\x -> LA.fromList [1, realToFrac x]) . F.rgetField @Nitro)
-          (F.rgetField @Block)
           (\r -> (F.rgetField @Variety r, F.rgetField @Block r))
+          (F.rgetField @Block)
         )
         oatsFrame
-      levels =
-        VB.fromList [LevelSpec numInCat1 True Nothing, LevelSpec numInCat2 True Nothing)]
+      levels = VB.fromList
+        [LevelSpec numInCat1 True Nothing, LevelSpec numInCat2 True Nothing]
       th0 = setCovarianceVector levels 1 0 -- LA.fromList [2, 2]
--}
+
   resultEither <- runPIRLS_M $ do
     let (n, p) = LA.size mX
         rcRows = VB.length vRC
@@ -103,52 +102,6 @@ main = do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem mixedModel randomEffectCalc
-{-    
-    let smA = makeA mixedModel randomEffectCalc
-    when verbose $ liftIO $ do
-      putStrLn "A"
-      LA.disp 2 $ SD.toDenseMatrix smA
-    let (s, t) = makeST th0
-    when verbose $ liftIO $ do
-      putStrLn "S"
-      LA.disp 2 $ SD.toDenseMatrix s
-      putStrLn "T"
-      LA.disp 2 $ SD.toDenseMatrix t
-    let aStar = makeAStar p q smA makeST th0
-    when verbose $ liftIO $ do
-      putStrLn "A*"
-      LA.disp 2 $ SD.toDenseMatrix aStar
-    (th_ML, perm_ML, (pd_ML, ldL2_ML, r_ML, ldL_ML)) <- minimizeDeviance
-      ML
-      p
-      q
-      n
-      levels
-      smA
-      makeST
-      th0
-    liftIO $ putStrLn $ "ML Solution: profiled Deviance=" ++ (show pd_ML)
-    liftIO $ putStrLn $ "ML Solution: r=" ++ show r_ML
-    liftIO $ putStrLn $ "ML Solution: ldL2=" ++ show ldL2_ML
-    when verbose $ liftIO $ do
-      putStrLn "perm="
-      LA.disp 0 $ SD.toDenseMatrix perm_ML
-      putStrLn "L="
-      LA.disp 2 $ SD.toDenseMatrix $ ldL_ML
-    (beta_ML, b_ML, bS_ML) <- parametersFromSolution ML
-                                                     p
-                                                     q
-                                                     makeST
-                                                     th_ML
-                                                     (perm_ML, ldL_ML)
-                                                     r_ML
-    liftIO $ do
-      putStrLn $ "ML Fixed  (beta) =" ++ show (SD.toDenseVector beta_ML)
-      putStrLn $ "ML Random (th) =" ++ show th_ML
-      putStrLn $ "ML Random (u, AKA b*) =" ++ show (SD.toDenseVector bS_ML)
-      putStrLn $ "ML Random (b) =" ++ show (SD.toDenseVector b_ML)
-    report p q levels vY mX smZ beta_ML b_ML
--}
     (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance2
       MDVSimple
       ML
@@ -169,32 +122,6 @@ main = do
            smZ
            (SD.toSparseVector vBeta2_ML)
            (SD.toSparseVector vb2_ML)
-{-
-    (th_REML, perm_REML, (pd_REML, ldL2_REML, r_REML, ldL_REML)) <-
-      minimizeDeviance REML p q n levels smA makeST th0
-    liftIO $ putStrLn $ "REML Solution: profiled Deviance=" ++ (show pd_REML)
-    liftIO $ putStrLn $ "REML Solution: r=" ++ show r_REML
-    liftIO $ putStrLn $ "REML Solution: ldL2=" ++ show ldL2_REML
-    when verbose $ liftIO $ do
-      putStrLn "perm="
-      LA.disp 0 $ SD.toDenseMatrix perm_REML
-      putStrLn "L="
-      LA.disp 2 $ SD.toDenseMatrix $ ldL_REML
-    (beta_REML, b_REML, bS_REML) <- parametersFromSolution
-      REML
-      p
-      q
-      makeST
-      th_REML
-      (perm_REML, ldL_REML)
-      r_REML
-    liftIO $ do
-      putStrLn $ "REML Fixed  (beta) =" ++ show (SD.toDenseVector beta_REML)
-      putStrLn $ "REML Random (th) =" ++ show th_REML
-      putStrLn $ "ML Random (u, AKA b*) =" ++ show (SD.toDenseVector bS_REML)
-      putStrLn $ "REML Random (b) =" ++ show (SD.toDenseVector b_REML)
-    report p q levels vY mX smZ beta_REML b_REML
--}
     (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance2
       MDVSimple
       REML
@@ -215,6 +142,7 @@ main = do
            smZ
            (SD.toSparseVector vBeta2_REML)
            (SD.toSparseVector vb2_REML)
+{-           
     cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
     (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance2
       PDVSimple
@@ -228,6 +156,7 @@ main = do
       putStrLn $ "betaTest=" ++ show betaTest
       putStrLn $ "uTest=" ++ show uTest
       putStrLn $ "bTest=" ++ show bTest
+-}
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
     Right ()  -> putStrLn $ "Success!"
