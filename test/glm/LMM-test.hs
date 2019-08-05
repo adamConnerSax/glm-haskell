@@ -6,7 +6,8 @@
 module Main where
 
 import           Numeric.LinearMixedModel
-import qualified Numeric.SparseDenseConversions as SD
+import qualified Numeric.SparseDenseConversions
+                                               as SD
 import           DataFrames
 import qualified Frames                        as F
 
@@ -53,8 +54,9 @@ main = do
           (F.rgetField @Subject)
         )
         sleepStudyFrame
-      levels = VB.fromList [LevelSpec numInCat True (Just $ VB.fromList [False, True])]
-      th0    = setCovarianceVector levels 1 0 --LA.fromList [1, 1, 0]
+      levels = VB.fromList
+        [LevelSpec numInCat True (Just $ VB.fromList [False, True])]
+      th0 = setCovarianceVector levels 1 0 --LA.fromList [1, 1, 0]
 
 {-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
@@ -91,16 +93,17 @@ main = do
       putStrLn "X="
       LA.disp 2 mX
       putStrLn $ "levels=" ++ show levels
-    let smZ    = makeZ mX levels rowClassifier
-        makeST = makeSTF levels
-        mkLambda = makeLambda levels
-        (_, q) = SLA.dim smZ
-        mixedModel = MixedModel (RegressionModel mX vY) levels
+    let smZ              = makeZ mX levels rowClassifier
+        makeST           = makeSTF levels
+        mkLambda         = makeLambda levels
+        (_, q)           = SLA.dim smZ
+        mixedModel       = MixedModel (RegressionModel mX vY) levels
         randomEffectCalc = RandomEffectCalculated smZ mkLambda
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem mixedModel randomEffectCalc
+{-    
     let smA = makeA mixedModel randomEffectCalc
     when verbose $ liftIO $ do
       putStrLn "A"
@@ -145,8 +148,13 @@ main = do
       putStrLn $ "ML Random (u, AKA b*) =" ++ show (SD.toDenseVector bS_ML)
       putStrLn $ "ML Random (b) =" ++ show (SD.toDenseVector b_ML)
     report p q levels vY mX smZ beta_ML b_ML
-
-    (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance2 ML mixedModel randomEffectCalc th0
+-}
+    (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance2
+      MDVSimple
+      ML
+      mixedModel
+      randomEffectCalc
+      th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
@@ -161,7 +169,7 @@ main = do
            smZ
            (SD.toSparseVector vBeta2_ML)
            (SD.toSparseVector vb2_ML)
-
+{-
     (th_REML, perm_REML, (pd_REML, ldL2_REML, r_REML, ldL_REML)) <-
       minimizeDeviance REML p q n levels smA makeST th0
     liftIO $ putStrLn $ "REML Solution: profiled Deviance=" ++ (show pd_REML)
@@ -186,8 +194,13 @@ main = do
       putStrLn $ "ML Random (u, AKA b*) =" ++ show (SD.toDenseVector bS_REML)
       putStrLn $ "REML Random (b) =" ++ show (SD.toDenseVector b_REML)
     report p q levels vY mX smZ beta_REML b_REML
-
-    (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance2 REML mixedModel randomEffectCalc th0
+-}
+    (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance2
+      MDVSimple
+      REML
+      mixedModel
+      randomEffectCalc
+      th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
@@ -202,7 +215,19 @@ main = do
            smZ
            (SD.toSparseVector vBeta2_REML)
            (SD.toSparseVector vb2_REML)
-
+    cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
+    (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance2
+      PDVSimple
+      cholmodFactor
+      REML
+      mixedModel
+      randomEffectCalc
+      (LA.fromList [0.9666, 0.0152, 0.2309])
+    liftIO $ do
+      putStrLn $ "pdTest=" ++ show pdTest
+      putStrLn $ "betaTest=" ++ show betaTest
+      putStrLn $ "uTest=" ++ show uTest
+      putStrLn $ "bTest=" ++ show bTest
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
     Right ()  -> putStrLn $ "Success!"
