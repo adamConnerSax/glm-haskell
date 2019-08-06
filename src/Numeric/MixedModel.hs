@@ -222,7 +222,7 @@ makeLambda levels =
   in  (\vTh -> SLA.fromBlocksDiag (allDiags vTh))
 
 xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
-xTxPlusI smX = (smX SLA.#^# smX) SLA.^+^ (SLA.eye $ SLA.ncols smX)
+xTxPlusI smX = (smX SLA.#~^# smX) SLA.^+^ (SLA.eye $ SLA.ncols smX)
 
 logDetTriangularSM :: RealFloat a => SLA.SpMatrix a -> a
 logDetTriangularSM smX =
@@ -238,7 +238,7 @@ logDetTriangularM mX =
 
 type CholmodFactor = (CH.ForeignPtr CH.Common -- ^ pre-allocated CHOMOD common space
                      , CH.ForeignPtr CH.Factor -- ^ precomputed pattern work on Z
---                     , PermutationMatrix -- ^ permutation matrix from above
+                     , PermutationMatrix -- ^ permutation matrix from above
                      )
 
 cholmodAnalyzeProblem
@@ -247,9 +247,12 @@ cholmodAnalyzeProblem (RandomEffectCalculated smZ _) = do
   cholmodC <- liftIO CH.allocCommon
   liftIO $ CH.startC cholmodC
   liftIO $ CH.setFinalLL 1 cholmodC -- I don't quite get this.  We should be able to solve LDx = b either way??
-  cholmodF <-
-    liftIO $ CH.spMatrixAnalyze cholmodC CH.SquareSymmetricLower $ xTxPlusI smZ
-  return (cholmodC, cholmodF)
+  (cholmodF, smP) <-
+    liftIO $ CH.spMatrixAnalyzeWP cholmodC CH.SquareSymmetricLower $ xTxPlusI
+      smZ
+--  liftIO $ CH.printFactor cholmodF "After analyze, before factorize" cholmodC
+--  liftIO $ putStrLn "smP=" >> (LA.disp 1 $ SD.toDenseMatrix smP)
+  return (cholmodC, cholmodF, smP)
 
 data ProfiledDevianceVerbosity = PDVNone | PDVSimple | PDVAll deriving (Show, Eq)
 
@@ -274,7 +277,6 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
         smZSt  = SLA.transpose smZS
---        (_, _, smP) = cf
     CholeskySolutions smLth smRzx mRx svBeta svu <- cholmodCholeskySolutions
       cf
       mm
@@ -307,7 +309,7 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
     let svPu    = SLA.takeSV q svX
         svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
 -}
-    let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
+    let svb     = (SLA.transposeSM lambda) SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
         vBeta   = SD.toDenseVector svBeta
 --        vBeta   = SD.toDenseVector $ SLA.takeSV p $ SLA.dropSV q svX
         vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZ SLA.#> svb)
@@ -341,31 +343,31 @@ cholmodCholeskySolutions
   -> CovarianceVector
   -> IO CholeskySolutions
 cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
-  let (cholmodC, cholmodF) = cholmodFactor
+  let (cholmodC, cholmodF, _) = cholmodFactor
       (MixedModel             (RegressionModel mX vY) levels  ) = mixedModel
       (RandomEffectCalculated smZ                     mkLambda) = randomEffCalcs
-      lambda               = mkLambda vTh
-      smZS                 = smZ SLA.## lambda
-      smZSt                = SLA.transpose smZS
-      n                    = LA.size vY
-      (_, p)               = LA.size mX
-      (_, q)               = SLA.dim smZ
+      lambda                  = mkLambda vTh
+      smZS                    = smZ SLA.## lambda
+      smZSt                   = SLA.transpose smZS
+      n                       = LA.size vY
+      (_, p)                  = LA.size mX
+      (_, q)                  = SLA.dim smZ
   -- Cholesky factorize to get L_theta *and* update factor for solving with it
   CH.spMatrixFactorize cholmodC cholmodF CH.SquareSymmetricLower
     $ SLA.filterSM lowerTriangular
     $ xTxPlusI
     $ smZS
     -- compute Rzx
-  let smZStX = smZSt SLA.## (SD.toSparseMatrix mX)
-  -- TODO: these can probably be combined as a single function in CholmodExtras, saving some copying of data
-  smPZStX <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smZStX -- P(Z*)'X
+
   let svZSty = smZSt SLA.#> SD.toSparseVector vY
   smPZSty <- CH.solveSparse cholmodC
                             cholmodF
                             CH.CHOLMOD_P
                             (SD.svColumnToSM svZSty)
-  svCu  <- SLA.toSV <$> CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPZSty
-  smRzx <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
+  svCu <- SLA.toSV <$> CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPZSty
+  let smZStX = smZSt SLA.#~# (SD.toSparseMatrix mX)
+  smPZStX <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smZStX -- P(Z*)'X
+  smRzx   <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPZStX -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
   --  let smRxTRx = (SD.toSparseMatrix $ LA.tr mX LA.<> mX) SLA.^-^ (SLA.transposeSM smRzx SLA.## smRzx)
   --      beta = SLA.luSolve (SD.toSparseVector (mX LA.#> vY) SLA.^-^ (smRzx SLA.#> svCu)
   -- compute Rx
@@ -381,12 +383,12 @@ cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
       svRzxBeta        = smRzx SLA.#> svBeta
 --      smRzxBeta        = SD.svColumnToSM svRzxBeta
       smCuMinusRzxBeta = SD.svColumnToSM (svCu SLA.^-^ svRzxBeta)
-  smPu  <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_DLt smCuMinusRzxBeta
+  smPu  <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Lt smCuMinusRzxBeta
   svu   <- SLA.toSV <$> (CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Pt $ smPu)
   -- NB: This has to happen after the solves because it unfactors the factor...
   -- NB: It does *not* undo the analysis
   smLth <- CH.choleskyFactorSM cholmodF cholmodC
-  return $ CholeskySolutions smLth smRzx mRx svBeta svu
+  return $ CholeskySolutions smLth smRzx mRx svBeta (SLA.toSV smPu) --svu
 
 
 ---
