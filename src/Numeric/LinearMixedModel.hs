@@ -157,7 +157,7 @@ profiledDeviance
      )
   -> CovarianceVector -- ^ theta
   -> (Double, Double, Double, SLA.SpMatrix Double)
-profiledDeviance (cholmodC, cholmodF, _) dt p q n smA mkST th
+profiledDeviance (cholmodC, cholmodF) dt p q n smA mkST th
   = let
       smAS = makeAStar p q smA mkST th
       cholL =
@@ -199,7 +199,6 @@ minimizeDeviance
   -> P.Sem
        r
        ( LA.Vector Double
-       , SLA.SpMatrix Double
        , ( Double
          , Double
          , Double
@@ -209,10 +208,9 @@ minimizeDeviance
 minimizeDeviance dt p q n levels smA mkST th0 = do
   cholmodC <- liftIO CH.allocCommon
   liftIO $ CH.startC cholmodC
-  (cholmodF, permSM) <- liftIO
-    $ CH.spMatrixAnalyze cholmodC CH.SquareSymmetricLower smA
+  cholmodF <- liftIO $ CH.spMatrixAnalyze cholmodC CH.SquareSymmetricLower smA
   let
-    pd x = profiledDeviance (cholmodC, cholmodF, permSM) dt p q n smA mkST x
+    pd x = profiledDeviance (cholmodC, cholmodF) dt p q n smA mkST x
     obj x = (\(d, _, _, _) -> d) $ pd x
     stop           = NL.ObjectiveRelativeTolerance 1e-6 NL.:| []
     thetaLB        = thetaLowerBounds levels
@@ -241,7 +239,7 @@ minimizeDeviance dt p q n levels smA mkST th0 = do
         ++ show result
         ++ ") reached! At th="
       liftIO $ print thS
-      return $ (thS, permSM, pd thS)
+      return $ (thS, pd thS)
 
 data MinimizeDevianceVerbosity = MDVNone | MDVSimple
 
@@ -262,13 +260,12 @@ minimizeDeviance2
        ) -- ^ (theta, profiled_deviance, beta, u, b)
 minimizeDeviance2 verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0
   = do
-    (cholmodC, cholmodF, smP) <- cholmodAnalyzeProblem reCalc
+    (cholmodC, cholmodF) <- cholmodAnalyzeProblem reCalc
     let
       pdv = case verbosity of
         MDVNone   -> PDVNone
         MDVSimple -> PDVSimple
-      pd x =
-        profiledDeviance2 pdv (cholmodC, cholmodF, smP) dt mixedModel reCalc x
+      pd x = profiledDeviance2 pdv (cholmodC, cholmodF) dt mixedModel reCalc x
       obj x = unsafePerformIO $ fmap (\(d, _, _, _) -> d) $ pd x
       stop           = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
       thetaLB        = thetaLowerBounds levels

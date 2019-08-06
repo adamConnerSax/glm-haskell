@@ -42,3 +42,12 @@ toSparseVector
   :: (LA.Container LA.Vector a, RealFrac a) => LA.Vector a -> SLA.SpVector a
 toSparseVector v = SLA.fromListDenseSV (LA.size v) $ LA.toList v
 
+svColumnToSM :: SLA.SpVector a -> SLA.SpMatrix a
+svColumnToSM svX =
+  SLA.fromListSM (SLA.dim svX, 1) $ fmap (\(r, x) -> (r, 0, x)) $ SLA.toListSV
+    svX
+
+svRowToSM :: SLA.SpVector a -> SLA.SpMatrix a
+svRowToSM svX =
+  SLA.fromListSM (1, SLA.dim svX) $ fmap (\(c, x) -> (0, c, x)) $ SLA.toListSV
+    svX

@@ -9,6 +9,7 @@ module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   , SolveSystem (..)
   , solveSparse
   , spMatrixAnalyze
+  , spMatrixAnalyzeWP
   , spMatrixCholesky
   , unsafeSpMatrixCholesky
   , spMatrixFactorize
@@ -151,11 +152,11 @@ spMatrixToTriplet fpc ms smX = do
 
 -- | Compute fill-reducing permutation, etc. for a symmetric positive-definite matrix
 -- This only requires that the lower triangle be filled in
-spMatrixAnalyze :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+spMatrixAnalyzeWP :: ForeignPtr CH.Common -- ^ CHOLMOD environment
                 -> MatrixSymmetry
                 -> SLA.SpMatrix Double -- ^ matrix to analyze
                 -> IO (ForeignPtr CH.Factor, SLA.SpMatrix Double) -- ^ analysis and fill-reducing permutation
-spMatrixAnalyze fpc ms smX = do
+spMatrixAnalyzeWP fpc ms smX = do
   triplet <- spMatrixToTriplet fpc ms smX
   when debug $ printTriplet (CH.fPtr triplet) "spMatrixAnalyze" fpc
   sparse <- CH.tripletToSparse triplet fpc
@@ -165,6 +166,23 @@ spMatrixAnalyze fpc ms smX = do
   withForeignPtr fpc $ \pc -> do
     withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc    
   return (f, permSM)
+
+-- | Compute fill-reducing permutation, etc. for a symmetric positive-definite matrix
+-- This only requires that the lower triangle be filled in
+spMatrixAnalyze :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                -> MatrixSymmetry
+                -> SLA.SpMatrix Double -- ^ matrix to analyze
+                -> IO (ForeignPtr CH.Factor)
+spMatrixAnalyze fpc ms smX = do
+  triplet <- spMatrixToTriplet fpc ms smX
+  when debug $ printTriplet (CH.fPtr triplet) "spMatrixAnalyze" fpc
+  sparse <- CH.tripletToSparse triplet fpc
+  f <- CH.analyze sparse fpc
+  when debug $ printFactor f "spMatrixAnalyze" fpc
+  withForeignPtr fpc $ \pc -> do
+    withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc    
+  return f
+
   
 -- | compute the lower-triangular Cholesky factor using the given analysis stored in Factor
 -- the matrix given here must have the same pattern of non-zeroes as the one used for the
