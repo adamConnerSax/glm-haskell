@@ -145,12 +145,12 @@ main = do
 {-           
     cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
     (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance2
-      PDVSimple
+      PDVAll
       cholmodFactor
       REML
       mixedModel
       randomEffectCalc
-      (LA.fromList [0.9666, 0.0152, 0.2309])
+      (LA.fromList [0.855, 1.127])
     liftIO $ do
       putStrLn $ "pdTest=" ++ show pdTest
       putStrLn $ "betaTest=" ++ show betaTest
