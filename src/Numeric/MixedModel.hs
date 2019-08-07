@@ -57,14 +57,14 @@ data RegressionModel = RegressionModel FixedPredictors Observations
 -- NB:  If X has a constant column, there is redundancy
 -- here between the Bool in the tuple and the first bool
 -- in the vector.
-data LevelSpec = LevelSpec { nCategories :: Int
-                           , groupIntercept :: Bool
-                           , groupSlopes :: Maybe (VB.Vector Bool)
-                           } deriving (Show, Eq)
+data GroupFitSpec = GroupFitSpec { nCategories :: Int
+                                 , groupIntercept :: Bool
+                                 , groupSlopes :: Maybe (VB.Vector Bool)
+                                 } deriving (Show, Eq)
 
-type Levels = VB.Vector LevelSpec
+type GroupFitSpecs = VB.Vector GroupFitSpec
 
-data MixedModel = MixedModel RegressionModel Levels
+data MixedModel = MixedModel RegressionModel GroupFitSpecs
 
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVector = LA.Vector Double
@@ -76,14 +76,14 @@ type PermutationMatrix = SLA.SpMatrix Double -- should this be (SLA.SpMatrix Int
 
 data DevianceType = ML | REML deriving (Show, Eq)
 
-effectsForLevel :: LevelSpec -> Int
-effectsForLevel (LevelSpec _ b vbM) =
+effectsForGroup :: GroupFitSpec -> Int
+effectsForGroup (GroupFitSpec _ b vbM) =
   (if b then 1 else 0) + (maybe 0 (length . VB.filter id) vbM)
-{-# INLINABLE effectsForLevel #-}
+{-# INLINABLE effectsForGroup #-}
 
-colsForLevel :: LevelSpec -> Int
-colsForLevel l = nCategories l * effectsForLevel l
-{-# INLINABLE colsForLevel #-}
+colsForGroup :: GroupFitSpec -> Int
+colsForGroup l = nCategories l * effectsForGroup l
+{-# INLINABLE colsForGroup #-}
 
 -- classify row into its levels
 -- the vector has a category number for each level
@@ -96,51 +96,55 @@ categoryNumber :: RowClassifier -> Int -> Int -> Int
 categoryNumber rowClassifier rowIndex levelIndex =
   rowClassifier rowIndex VB.! levelIndex
 
---type LevelEffectsSpec = [(Bool, Maybe (LA.Vector Bool))]
+data ParameterEstimates =
+  ParameterEstimates
+  { pEstimate :: LA.Vector Double
+  , pCovariance :: LA.Matrix Double
+  }
+
+--type FixedParameterEstimates = ParameterEstimates  
+--type GroupParameterEstimates = 
 
 type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
 runPIRLS_M
-  :: P.Sem '[{-P.Error SomeException,-}
-             P.Error T.Text, P.Lift IO] a
+  :: P.Sem '[P.Error T.Text, P.Lift IO] a
   -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
 
-setCovarianceVector :: Levels -> Double -> Double -> LA.Vector Double
-setCovarianceVector levels diag offDiag = FL.fold fld levels
+setCovarianceVector :: GroupFitSpecs -> Double -> Double -> LA.Vector Double
+setCovarianceVector groupFS diag offDiag = FL.fold fld groupFS
  where
   fld = FL.Fold
     (\bs l ->
-      let e       = effectsForLevel l
+      let e       = effectsForGroup l
           entries = e * (e + 1) `div` 2
           col n = n `div` e
           row n = col n + n `mod` e
           set n = if (row n == col n) then diag else offDiag
       in  bs ++ fmap set (take entries $ iterate (+ 1) 0)
-      --L.replicate e diag
---          ++ replicate (e * (e - 1) `div` 2) offDiag
     )
     []
     LA.fromList
 
 
 
-makeZ :: FixedPredictors -> Levels -> RowClassifier -> RandomEffectModelMatrix
-makeZ mX levels rc =
+makeZ :: FixedPredictors -> GroupFitSpecs -> RowClassifier -> RandomEffectModelMatrix
+makeZ mX groupFSs rc =
   let
     (nO, nP) = LA.size mX
-    k        = VB.length levels -- number of levels
-    levelSize n = nCategories (levels VB.! n)
-    q = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
+    k        = VB.length groupFSs -- number of levels
+    groupSize n = nCategories (groupFSs VB.! n)
+    q = FL.fold FL.sum $ fmap colsForGroup groupFSs -- total number of columns in Z
     predictor rowIndex fixedEffectIndex =
       mX `LA.atIndex` (rowIndex, fixedEffectIndex)
     -- construct Z for level as a fold over rows
-    entries :: Int -> Int -> LevelSpec -> Int -> [(Int, Int, Double)]
-    entries colOffset levelNumber level rowIndex
+    entries :: Int -> Int -> GroupFitSpec -> Int -> [(Int, Int, Double)]
+    entries colOffset groupNumber groupFS rowIndex
       = let
           entryOffset =
             colOffset
-              + (effectsForLevel level * categoryNumber rc rowIndex levelNumber)
-          (intercept, slopeOffset) = if groupIntercept level
+              + (effectsForGroup groupFS * categoryNumber rc rowIndex groupNumber)
+          (intercept, slopeOffset) = if groupIntercept groupFS
             then ([(rowIndex, entryOffset, 1)], entryOffset + 1)
             else ([], entryOffset)
           slopeF :: FL.Fold (Bool, Int) [(Int, Int, Double)]
@@ -154,23 +158,23 @@ makeZ mX levels rc =
             )
             ([], slopeOffset)
             fst
-          slopes = case groupSlopes level of
+          slopes = case groupSlopes groupFS of
             Just slopeV -> FL.fold slopeF $ VB.zip slopeV (VB.generate nP id)
             Nothing     -> []
         in
           intercept ++ slopes
-    ziFold levelNumber levelOffset level =
-      let q = colsForLevel level
-      in  FL.Fold (\mes n -> mes ++ entries levelOffset levelNumber level n)
+    ziFold groupNumber groupOffset groupFS =
+      let q = colsForGroup groupFS
+      in  FL.Fold (\mes n -> mes ++ entries groupOffset groupNumber groupFS n)
                   []
                   id
-    levelNumbers = VB.generate (VB.length levels) id
-    levelOffsets = VB.prescanl' (+) 0 $ fmap colsForLevel levels
+    groupNumbers = VB.generate (VB.length groupFSs) id
+    groupOffsets = VB.prescanl' (+) 0 $ fmap colsForGroup groupFSs
     zis          = concat $ FL.fold
       (sequenceA $ fmap (\(ln, lo, l) -> ziFold ln lo l) $ VB.zip3
-        levelNumbers
-        levelOffsets
-        levels
+        groupNumbers
+        groupOffsets
+        groupFSs
       )
       [0 .. (nO - 1)]
   in
@@ -203,22 +207,22 @@ checkProblem (MixedModel (RegressionModel mX vY) _) (RandomEffectCalculated smZ 
 -- Lambda is built from lower-triangular blocks
 -- which are p_i x p_i.  Theta contains the values
 -- for each block, in col major order
-makeLambda :: Levels -> (CovarianceVector -> Lambda)
-makeLambda levels =
+makeLambda :: GroupFitSpecs -> (CovarianceVector -> Lambda)
+makeLambda groupFSs =
   let blockF vTH = FL.Fold
-        (\(bs, vx) l' -> ((l', vx) : bs, VS.drop (effectsForLevel l') vx))
+        (\(bs, vx) l' -> ((l', vx) : bs, VS.drop (effectsForGroup l') vx))
         ([], vTH)
         (reverse . fst)
-      blockData vTh = FL.fold (blockF vTh) levels
+      blockData vTh = FL.fold (blockF vTh) groupFSs
       templateBlock l vTh =
-        let pl  = effectsForLevel l
+        let pl  = effectsForGroup l
             lTh = VS.toList vTh
             lts vx = fmap (\((r, c), v) -> (r, c, v)) $ zip
               ([ (r, c) | c <- [0 .. (pl - 1)], r <- [c .. (pl - 1)] ])
               vx
         in  SLA.fromListSM (pl, pl) $ lts lTh
-      perLevel (l, vx) = replicate (nCategories l) $ templateBlock l vx
-      allDiags vTh = concat $ fmap perLevel $ blockData vTh
+      perGroup (l, vx) = replicate (nCategories l) $ templateBlock l vx
+      allDiags vTh = concat $ fmap perGroup $ blockData vTh
   in  (\vTh -> SLA.fromBlocksDiag (allDiags vTh))
 
 xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
@@ -256,7 +260,7 @@ cholmodAnalyzeProblem (RandomEffectCalculated smZ _) = do
 
 data ProfiledDevianceVerbosity = PDVNone | PDVSimple | PDVAll deriving (Show, Eq)
 
-profiledDeviance2
+profiledDeviance
   :: ProfiledDevianceVerbosity
   -> CholmodFactor
   -> DevianceType
@@ -266,10 +270,10 @@ profiledDeviance2
   -> IO
        ( Double
        , LA.Vector Double
-       , LA.Vector Double
-       , LA.Vector Double
+       , SLA.SpVector Double
+       , SLA.SpVector Double
        ) -- ^ (pd, beta, u, b) 
-profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCalc@(RandomEffectCalculated smZ mkLambda) vTh
+profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCalc@(RandomEffectCalculated smZ mkLambda) vTh
   = do
     let n      = LA.size vY
         (_, p) = LA.size mX
@@ -293,25 +297,8 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
       LA.disp 2 $ SD.toDenseMatrix smRzx
       putStrLn "Rx"
       LA.disp 2 mRx
-{-
-    let smUT =
-          SLA.filterSM upperTriangular
-            $   (SLA.transpose smLth -||- smRzx)
-            -=- (SLA.zeroSM p q -||- smRx)
-    let smLT = SLA.transpose smUT
-    let svBu = (smP SLA.## smZSt) SLA.#> (SD.toSparseVector vY)
-        svBl = SD.toSparseVector $ (LA.tr mX) LA.#> vY
-    let svB =
-          SLA.fromListSV (q + p)
-            $  (SLA.toListSV svBu)
-            ++ (fmap (\(i, x) -> (i + q, x)) (SLA.toListSV svBl))
-    svX :: SLA.SpVector Double <- SLA.luSolve smLT smUT svB
-    let svPu    = SLA.takeSV q svX
-        svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
--}
     let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
         vBeta   = SD.toDenseVector svBeta
---        vBeta   = SD.toDenseVector $ SLA.takeSV p $ SLA.dropSV q svX
         vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
     let logLth        = logDetTriangularSM smLth
@@ -323,11 +310,12 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
       let (_, _, smP) = cf
       putStrLn $ "smP="
       LA.disp 1 $ SD.toDenseMatrix smP
+      putStrLn $ "rTheta^2=" ++ show rTheta2
       putStrLn $ "2 * logLth=" ++ show (2 * logLth)
       putStrLn $ "2 * logDet=" ++ show (2 * logDet)
     when (verbosity == PDVAll || verbosity == PDVSimple) $ do
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
-    return (pd, vBeta, SD.toDenseVector $ svu, SD.toDenseVector $ svb)
+    return (pd, vBeta, svu, svb)
 
 upperTriangular :: Int -> Int -> a -> Bool
 upperTriangular r c _ = (r <= c)
@@ -397,101 +385,3 @@ cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
   return $ CholeskySolutions smLth smRzx mRx svBeta svu
 
 
----
-makeZ_Old
-  :: FixedPredictors -> Levels -> RowClassifier -> RandomEffectModelMatrix
-makeZ_Old mX levels rc =
-  let
-    (nO, nP) = LA.size mX
-    k        = VB.length levels -- number of levels
-    levelSize n = nCategories (levels VB.! n)
-    q          = FL.fold FL.sum $ fmap colsForLevel levels -- total number of columns in Z
-    -- build list of items to put in Z, level by level
-    obsIndices = Seq.fromFunction nO id
-    intercept startingCol level =
-      let spIndex obsIndex = (obsIndex, categoryNumber rc obsIndex level)
-          spEntry obsIndex =
-            let spi = spIndex obsIndex in (fst spi, startingCol + snd spi, 1)
-      in  fmap spEntry obsIndices
-    slope startingCol level predIndex =
-      let spIndex obsIndex = (obsIndex, categoryNumber rc obsIndex level)
-          spValue obsIndex = mX `LA.atIndex` (obsIndex, predIndex)
-          spEntry obsIndex =
-            let spi = spIndex obsIndex
-            in  (fst spi, startingCol + snd spi, spValue obsIndex)
-      in  fmap spEntry obsIndices
-    zEntriesForSlope startingCol level vb =
-      let predIndices = fmap fst $ VB.filter snd $ VB.zip
-            (VB.generate (VB.length vb) id)
-            vb
-          startingCols = VB.generate
-            (VB.length predIndices)
-            (\n -> startingCol + n * (levelSize level))
-          newStart = startingCol + (VB.length predIndices * (levelSize level))
-          entriesF (pi, sc) = slope sc level pi
-      in  ( FL.fold FL.mconcat $ fmap entriesF $ VB.zip predIndices startingCols
-          , newStart
-          )
-    zEntriesForLevel startingCol level (LevelSpec qL b vbM) =
-      let (interceptZs, newStartI) = if b
-            then (intercept startingCol level, startingCol + qL)
-            else (Seq.empty, startingCol)
-          (slopeZs, newStartS) = case vbM of
-            Nothing -> (Seq.empty, newStartI)
-            Just vb -> zEntriesForSlope newStartI level vb
-      in  (interceptZs <> slopeZs, newStartS)
-    zFold = FL.Fold
-      (\(zs, sc, l) x ->
-        let (newZs, newStart) = zEntriesForLevel sc l x
-        in  (zs <> newZs, newStart, l + 1)
-      )
-      (Seq.empty, 0, 0)
-      id
-    (zEntries, numCols, _) = FL.fold zFold levels
-  in
-    SLA.fromListSM (nO, q) zEntries
-
-
-
--- S is the diagonal matrix of covariances in theta
--- T is unit-lower-triangular of off-diagonal covariances
--- this function produces a function mapping the vector theta to the matrix Lambda = ST
-makeSTF
-  :: Levels -> (CovarianceVector -> (SLA.SpMatrix Double, SLA.SpMatrix Double))
-makeSTF levels
-  = let
-      f
-        :: Num a
-        => LevelSpec
-        -> ([a] -> [(Int, Int, a)], [a] -> [(Int, Int, a)], Int, Int)
-      f l@(LevelSpec n _ _) =
-        let
-          e = effectsForLevel l
-          s' th =
-            fmap (\(x, v) -> (x, x, v)) $ zip (take e $ L.iterate (+ 1) 0) th
-          tlt' th = fmap (\((r, c), v) -> (r, c, v)) $ zip
-            ([ (r, c) | c <- [0 .. (e - 1)], r <- [(c + 1) .. (e - 1)] ])
-            th
-          t' th =
-            tlt' th ++ fmap (\x -> (x, x, 1)) (L.take e $ L.iterate (+ 1) 0)
-        in
-          (s', t', e, n)
-      makers = fmap f levels
-      diagOffset o = fmap (\(r, c, v) -> (r + o, c + o, v))
-      diagCopiesFrom i e n ivs =
-        mconcat $ fmap (flip diagOffset ivs) $ L.take n $ L.iterate (+ e) i
-    in
-      \thV ->
-        let thL = LA.toList thV
-            fld = FL.Fold
-              (\(sL, tL, thL', offset) (s', t', e, n) ->
-                ( sL ++ diagCopiesFrom offset e n (s' thL')
-                , tL ++ diagCopiesFrom offset e n (t' $ L.drop e thL')
-                , L.drop (e + (e * (e - 1) `div` 2)) thL'
-                , offset + (e * n)
-                )
-              )
-              ([], [], thL, 0)
-              id
-            (s, t, _, qT) = FL.fold fld makers
-        in  (SLA.fromListSM (qT, qT) s, SLA.fromListSM (qT, qT) t)

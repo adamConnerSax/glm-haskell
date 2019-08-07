@@ -69,9 +69,9 @@ main = do
           (F.rgetField @Block)
         )
         oatsFrame
-      levels = VB.fromList
-        [LevelSpec numInCat1 True Nothing, LevelSpec numInCat2 True Nothing]
-      th0 = setCovarianceVector levels 1 0 -- LA.fromList [2, 2]
+      groupFSs = VB.fromList
+        [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
+      th0 = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
 
   resultEither <- runPIRLS_M $ do
     let (n, p) = LA.size mX
@@ -87,22 +87,22 @@ main = do
       <> " rows in the data!"
     let rowClassifier n = vRC VB.! n
     when verbose $ liftIO $ do
-      putStrLn $ show $ fmap colsForLevel levels
+      putStrLn $ show $ fmap colsForGroup groupFSs
       putStrLn $ "y=" ++ show vY
       putStrLn "X="
       LA.disp 2 mX
-      putStrLn $ "levels=" ++ show levels
-    let smZ              = makeZ mX levels rowClassifier
-        makeST           = makeSTF levels
-        mkLambda         = makeLambda levels
+      putStrLn $ "levels=" ++ show groupFSs
+    let smZ              = makeZ mX groupFSs rowClassifier
+--        makeST           = makeSTF groupFSs
+        mkLambda         = makeLambda groupFSs
         (_, q)           = SLA.dim smZ
-        mixedModel       = MixedModel (RegressionModel mX vY) levels
+        mixedModel       = MixedModel (RegressionModel mX vY) groupFSs
         randomEffectCalc = RandomEffectCalculated smZ mkLambda
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem mixedModel randomEffectCalc
-    (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance2
+    (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance
       MDVSimple
       ML
       mixedModel
@@ -116,13 +116,13 @@ main = do
       putStrLn $ "b=" ++ show vb2_ML
     report p
            q
-           levels
+           groupFSs
            vY
            mX
            smZ
            (SD.toSparseVector vBeta2_ML)
            (SD.toSparseVector vb2_ML)
-    (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance2
+    (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance
       MDVSimple
       REML
       mixedModel
@@ -136,7 +136,7 @@ main = do
       putStrLn $ "b=" ++ show vb2_REML
     report p
            q
-           levels
+           groupFSs
            vY
            mX
            smZ
@@ -144,7 +144,7 @@ main = do
            (SD.toSparseVector vb2_REML)
 
     cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
-    (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance2
+    (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance
       PDVAll
       cholmodFactor
       REML
@@ -154,8 +154,8 @@ main = do
     liftIO $ do
       putStrLn $ "pdTest=" ++ show pdTest
       putStrLn $ "betaTest=" ++ show betaTest
-      putStrLn $ "uTest=" ++ show uTest
-      putStrLn $ "bTest=" ++ show bTest
+      putStrLn $ "uTest=" ++ show (SD.toDenseVector uTest)
+      putStrLn $ "bTest=" ++ show (SD.toDenseVector bTest)
 
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
