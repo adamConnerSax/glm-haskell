@@ -309,19 +309,22 @@ profiledDeviance2 verbosity cf dt mm@(MixedModel (RegressionModel mX vY) _) reCa
     let svPu    = SLA.takeSV q svX
         svu     = (SLA.transpose smP) SLA.#> svPu -- I could also do this via a cholmod solve
 -}
-    let svb     = (SLA.transpose lambda) SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
+    let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
         vBeta   = SD.toDenseVector svBeta
 --        vBeta   = SD.toDenseVector $ SLA.takeSV p $ SLA.dropSV q svX
-        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZ SLA.#> svb)
+        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
     let logLth        = logDetTriangularSM smLth
         (dof, logDet) = case dt of
           ML   -> (realToFrac n, logLth)
-          REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRx))          
+          REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRx))
         pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
     when (verbosity == PDVAll) $ do
-      putStrLn $ "2 * logLth=" ++ show ( 2 * logLth)
-      putStrLn $ "2 * logDet=" ++ show ( 2 * logDet)
+      let (_, _, smP) = cf
+      putStrLn $ "smP="
+      LA.disp 1 $ SD.toDenseMatrix smP
+      putStrLn $ "2 * logLth=" ++ show (2 * logLth)
+      putStrLn $ "2 * logDet=" ++ show (2 * logDet)
     when (verbosity == PDVAll || verbosity == PDVSimple) $ do
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
     return (pd, vBeta, SD.toDenseVector $ svu, SD.toDenseVector $ svb)

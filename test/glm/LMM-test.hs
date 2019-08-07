@@ -142,7 +142,7 @@ main = do
            smZ
            (SD.toSparseVector vBeta2_REML)
            (SD.toSparseVector vb2_REML)
-{-           
+
     cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
     (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance2
       PDVAll
@@ -156,7 +156,7 @@ main = do
       putStrLn $ "betaTest=" ++ show betaTest
       putStrLn $ "uTest=" ++ show uTest
       putStrLn $ "bTest=" ++ show bTest
--}
+
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
     Right ()  -> putStrLn $ "Success!"
