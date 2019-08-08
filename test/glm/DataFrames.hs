@@ -18,15 +18,16 @@
 
 module DataFrames where
 
+import qualified Numeric.GLM.Types             as GLM
+
 import qualified Frames                        as F
 import qualified Frames.CSV                    as F
 import qualified Frames.InCore                 as FI
 import qualified Data.Vinyl                    as V
---import qualified Data.Vinyl.TypeLevel          as V
 
 import qualified Numeric.LinearAlgebra         as LA
---import qualified Data.Sparse.SpMatrix          as SLA
 
+import qualified Data.Array                    as A
 import qualified Data.Map                      as M
 import           Data.Maybe                     ( catMaybes )
 import qualified Data.Text                     as T
@@ -41,11 +42,27 @@ import qualified Data.Vector                   as VB
 railCSV = "data/Rail.csv"
 F.tableTypes "RailRow" "data/Rail.csv"
 
+type RailEffect = GLM.WithIntercept ()
+getRailPredictor :: RailRow -> () -> Double
+getRailPredictor _ _ = undefined -- we need something of this type but if this gets called something has gone wrong!
+
 sleepStudyCSV = "data/SleepStudy.csv"
 F.tableTypes "SleepStudyRow" "data/SleepStudy.csv"
 
+data SleepStudyPredictor = SleepStudyDays deriving (Eq, Ord, Enum, Bounded, Show, A.Ix)
+type SleepStudyEffect = GLM.WithIntercept SleepStudyPredictor
+
+getSleepStudyPredictor :: SleepStudyRow -> SleepStudyPredictor -> Double
+getSleepStudyPredictor r _ = realToFrac $ F.rgetField @Days r
+
 oatsCSV = "data/Oats.csv"
 F.tableTypes "OatsRow" "data/Oats.csv"
+
+data OatsPredictor = OatsNitro deriving (Eq, Ord, Enum, Bounded, Show, A.Ix)
+type OatsEffect = GLM.WithIntercept OatsPredictor
+
+getOatsPredictor :: OatsRow -> OatsPredictor -> Double
+getOatsPredictor r _ = F.rgetField @Nitro r
 
 loadToFrame
   :: forall rs
@@ -80,12 +97,11 @@ defaultLoadToFrame = loadToFrame F.defaultParser
 --type OrdEqSnd t = (Ord (V.Snd t), Eq (V.Snd t))
 --categorizeFields :: V.AllConstrained OrdEqSnd rs => (F.Record rs -> [Int])
 
-
-
 lmePrepFrameOne
-  :: (Ord b, Eq b)
+  :: (Bounded p, Enum p, Ord b, Eq b)
   => (F.Record rs -> Double) -- ^ observations
-  -> (F.Record rs -> LA.Vector Double) -- ^ predictors
+  -> GLM.FixedEffects p
+  -> (F.Record rs -> p -> Double) -- ^ predictors
   -> (F.Record rs -> b) -- ^ classifier
   -> FL.Fold
        (F.Record rs)
@@ -93,7 +109,7 @@ lmePrepFrameOne
        , LA.Matrix Double
        , (VB.Vector (VB.Vector Int), Int)
        ) -- ^ (X,y,(row-classifier, size of class))
-lmePrepFrameOne observationF predictorF classF =
+lmePrepFrameOne observationF fe getPredictorF classF =
   let foldMapF
         :: Ord b
         => ST.State Int (M.Map b Int)
@@ -116,6 +132,14 @@ lmePrepFrameOne observationF predictorF classF =
           )
         , M.size m
         )
+      predictorF row = LA.fromList $ case fe of
+        GLM.FixedEffects interceptB ->
+          let pfs = fmap (getPredictorF row) [minBound ..]
+          in  case interceptB of
+                True  -> 1 : pfs
+                False -> pfs
+        GLM.InterceptOnly -> [1]
+
       foldObs   = fmap LA.fromList $ FL.premap observationF FL.list
       foldPred  = fmap LA.fromRows $ FL.premap predictorF FL.list
       foldClass = FL.premap classF FL.list
@@ -125,9 +149,10 @@ lmePrepFrameOne observationF predictorF classF =
 
 
 lmePrepFrameTwo
-  :: (Ord b, Eq b, Ord c, Eq c)
+  :: (Bounded p, Enum p, Ord b, Eq b, Ord c, Eq c)
   => (F.Record rs -> Double) -- ^ observations
-  -> (F.Record rs -> LA.Vector Double) -- ^ predictors
+  -> GLM.FixedEffects p
+  -> (F.Record rs -> p -> Double) -- ^ predictors
   -> (F.Record rs -> b) -- ^ classifier1
   -> (F.Record rs -> c) -- ^ classifier2
   -> FL.Fold
@@ -136,7 +161,7 @@ lmePrepFrameTwo
        , LA.Matrix Double
        , (VB.Vector (VB.Vector Int), Int, Int)
        ) -- ^ (X,y,(row-classifier, size of class 1, size of class 2))
-lmePrepFrameTwo observationF predictorF classbF classcF =
+lmePrepFrameTwo observationF fe getPredictorF classbF classcF =
   let
     foldMapF
       :: Ord z => ST.State Int (M.Map z Int) -> z -> ST.State Int (M.Map z Int)
@@ -157,6 +182,13 @@ lmePrepFrameTwo observationF predictorF classbF classcF =
             cCat <- M.lookup c mc
             return $ VB.fromList [bCat, cCat]
       in  ((VB.fromList . catMaybes $ fmap f x), M.size mb, M.size mc)
+    predictorF row = LA.fromList $ case fe of
+      GLM.FixedEffects interceptB ->
+        let pfs = fmap (getPredictorF row) [minBound ..]
+        in  case interceptB of
+              True  -> 1 : pfs
+              False -> pfs
+      GLM.InterceptOnly -> [1]
     foldObs    = fmap LA.fromList $ FL.premap observationF FL.list
     foldPred   = fmap LA.fromRows $ FL.premap predictorF FL.list
     foldClassb = FL.premap classbF FL.list

@@ -5,13 +5,14 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Numeric.LinearMixedModel
-  ( module Numeric.LinearMixedModel
-  , module Numeric.MixedModel
+module Numeric.GLM.LinearMixedModel
+  ( module Numeric.GLM.LinearMixedModel
+  , module Numeric.GLM.MixedModel
   )
 where
 
-import           Numeric.MixedModel
+import qualified Numeric.GLM.Types             as GLM
+import           Numeric.GLM.MixedModel
 import qualified Numeric.SparseDenseConversions
                                                as SD
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
@@ -68,7 +69,7 @@ thetaLowerBounds :: GroupFitSpecs -> NL.Bounds
 thetaLowerBounds levels =
   let negInfinity :: Double = negate $ 1 / 0
   in  NL.LowerBounds $ setCovarianceVector levels 0 negInfinity --FL.fold fld levels
-  
+
 data MinimizeDevianceVerbosity = MDVNone | MDVSimple
 
 minimizeDeviance

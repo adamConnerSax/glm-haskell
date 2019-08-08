@@ -5,12 +5,13 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Numeric.MixedModel where
+module Numeric.GLM.MixedModel where
 
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
                                                as CH
 import qualified Numeric.SparseDenseConversions
                                                as SD
+import qualified Numeric.GLM.Types             as GLM
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
@@ -102,13 +103,11 @@ data ParameterEstimates =
   , pCovariance :: LA.Matrix Double
   }
 
---type FixedParameterEstimates = ParameterEstimates  
---type GroupParameterEstimates = 
+type FixedParameterEstimates = ParameterEstimates
+type GroupParameterEstimates = VB.Vector FixedParameterEstimates
 
 type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
-runPIRLS_M
-  :: P.Sem '[P.Error T.Text, P.Lift IO] a
-  -> IO (Either T.Text a)
+runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
 
 setCovarianceVector :: GroupFitSpecs -> Double -> Double -> LA.Vector Double
@@ -127,8 +126,20 @@ setCovarianceVector groupFS diag offDiag = FL.fold fld groupFS
     LA.fromList
 
 
-
-makeZ :: FixedPredictors -> GroupFitSpecs -> RowClassifier -> RandomEffectModelMatrix
+{-
+Z is the random effects model matrix
+like X, the fixed effect model matrix,
+it has a row for each observation.
+Z has a column for each random effect:
+A column of ones for a random intercept and
+a column with the predictor from X for a random
+slope.
+-}
+makeZ
+  :: FixedPredictors
+  -> GroupFitSpecs
+  -> RowClassifier
+  -> RandomEffectModelMatrix
 makeZ mX groupFSs rc =
   let
     (nO, nP) = LA.size mX
@@ -143,7 +154,9 @@ makeZ mX groupFSs rc =
       = let
           entryOffset =
             colOffset
-              + (effectsForGroup groupFS * categoryNumber rc rowIndex groupNumber)
+              + ( effectsForGroup groupFS
+                * categoryNumber rc rowIndex groupNumber
+                )
           (intercept, slopeOffset) = if groupIntercept groupFS
             then ([(rowIndex, entryOffset, 1)], entryOffset + 1)
             else ([], entryOffset)
@@ -171,10 +184,9 @@ makeZ mX groupFSs rc =
     groupNumbers = VB.generate (VB.length groupFSs) id
     groupOffsets = VB.prescanl' (+) 0 $ fmap colsForGroup groupFSs
     zis          = concat $ FL.fold
-      (sequenceA $ fmap (\(ln, lo, l) -> ziFold ln lo l) $ VB.zip3
-        groupNumbers
-        groupOffsets
-        groupFSs
+      ( sequenceA
+      $ fmap (\(gNumber, gOffset, gSpec) -> ziFold gNumber gOffset gSpec)
+      $ VB.zip3 groupNumbers groupOffsets groupFSs
       )
       [0 .. (nO - 1)]
   in

@@ -7,13 +7,13 @@
 {-# LANGUAGE Rank2Types          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
-module Numeric.GeneralizedMixedModel
-  ( module Numeric.GeneralizedMixedModel
-  , module Numeric.MixedModel
+module Numeric.GLM.GeneralizedMixedModel
+  ( module Numeric.GLM.GeneralizedMixedModel
+  , module Numeric.GLM.MixedModel
   )
 where
-
-import           Numeric.MixedModel
+import qualified Numeric.GLM.Types             as GLM
+import           Numeric.GLM.MixedModel
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P

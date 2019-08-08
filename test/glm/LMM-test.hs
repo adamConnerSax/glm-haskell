@@ -5,7 +5,8 @@
 {-# LANGUAGE TypeApplications    #-}
 module Main where
 
-import           Numeric.LinearMixedModel
+import qualified Numeric.GLM.Types             as GLM
+import           Numeric.GLM.LinearMixedModel
 import qualified Numeric.SparseDenseConversions
                                                as SD
 import           DataFrames
@@ -33,45 +34,54 @@ main :: IO ()
 main = do
 {-
   railFrame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
-  let (vY, mX, (vRC, numInCat)) = FL.fold
+  let railFixedEffects :: GLM.FixedEffects ()
+      railFixedEffects          = GLM.InterceptOnly
+      (vY, mX, (vRC, numInCat)) = FL.fold
         (lmePrepFrameOne (realToFrac . F.rgetField @Travel)
-                         (const $ LA.fromList [1])
+                         railFixedEffects
+                         getRailPredictor
                          (F.rgetField @Rail)
         )
         railFrame
-      levels = VB.fromList [LevelSpec numInCat True Nothing]
-      th0    = setCovarianceVector levels 1 0 -- LA.fromList [2]
+      groupFSs = VB.fromList [GroupFitSpec numInCat True Nothing]
+      th0      = setCovarianceVector groupFSs 1 0 -- LA.fromList [2]
 -}
 {-
   sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
     sleepStudyCSV
     (const True)
-  let (vY, mX, (vRC, numInCat)) = FL.fold
-        (lmePrepFrameOne
-          (realToFrac . F.rgetField @Reaction)
-          ((\x -> LA.fromList [1, realToFrac x]) . F.rgetField @Days)
-          (F.rgetField @Subject)
-        )
-        sleepStudyFrame
-      levels = VB.fromList
-        [LevelSpec numInCat True (Just $ VB.fromList [False, True])]
-      th0 = setCovarianceVector levels 1 0 --LA.fromList [1, 1, 0]
+  let
+    sleepStudyFixedEffects :: GLM.FixedEffects SleepStudyPredictor
+    sleepStudyFixedEffects    = GLM.FixedEffects True
+    (vY, mX, (vRC, numInCat)) = FL.fold
+      (lmePrepFrameOne (realToFrac . F.rgetField @Reaction)
+                       sleepStudyFixedEffects
+                       getSleepStudyPredictor
+                       (F.rgetField @Subject)
+      )
+      sleepStudyFrame
+    groupFSs = VB.fromList
+      [GroupFitSpec numInCat True (Just $ VB.fromList [False, True])]
+    th0 = setCovarianceVector groupFSs 1 0 --LA.fromList [1, 1, 0]
 -}
 
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
     oatsCSV
     (const True)
-  let (vY, mX, (vRC, numInCat1, numInCat2)) = FL.fold
-        (lmePrepFrameTwo
-          (realToFrac . F.rgetField @Yield)
-          ((\x -> LA.fromList [1, realToFrac x]) . F.rgetField @Nitro)
-          (\r -> (F.rgetField @Variety r, F.rgetField @Block r))
-          (F.rgetField @Block)
-        )
-        oatsFrame
-      groupFSs = VB.fromList
-        [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
-      th0 = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
+  let
+    oatsFixedEffects :: GLM.FixedEffects OatsPredictor
+    oatsFixedEffects                      = GLM.FixedEffects True -- model using OatsPredictors and with intercept
+    (vY, mX, (vRC, numInCat1, numInCat2)) = FL.fold
+      (lmePrepFrameTwo (realToFrac . F.rgetField @Yield)
+                       oatsFixedEffects
+                       getOatsPredictor
+                       (\r -> (F.rgetField @Variety r, F.rgetField @Block r))
+                       (F.rgetField @Block)
+      )
+      oatsFrame
+    groupFSs = VB.fromList
+      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
+    th0 = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
 
   resultEither <- runPIRLS_M $ do
     let (n, p) = LA.size mX
