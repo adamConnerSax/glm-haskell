@@ -5,9 +5,14 @@ module Numeric.GLM.Types
   ( WithIntercept(..)
   , IndexedEffectSet
   , FixedEffects(..)
+  , effectIndex
+  , effectAtIndex
+  , effectSetMembers
+  , effectSubset
   , makeIndexedEffectSet
   , addIndexedEffect
   , indexedFixedEffectSet
+  , allFixedEffects
   )
 where
 
@@ -69,6 +74,10 @@ instance (Bounded b, A.Ix b) => A.Ix (WithIntercept b) where
 -- don't export this constructor !!
 data IndexedEffectSet b where
   IndexedEffectSet :: M.Map (WithIntercept b) Int -> M.Map Int (WithIntercept b) -> IndexedEffectSet b
+    deriving (Show)
+
+effectSetMembers :: IndexedEffectSet b -> [WithIntercept b]
+effectSetMembers (IndexedEffectSet indexByEffect _) = M.keys indexByEffect
 
 indexedEffectSetFromList :: Ord b => [WithIntercept b] -> IndexedEffectSet b
 indexedEffectSetFromList es =
@@ -94,23 +103,35 @@ effectAtIndex (IndexedEffectSet _ effectByIndex) n = M.lookup n effectByIndex
 
 -- serves as a holder for the intercept Choice and a proxy for the type b
 data FixedEffects b where
-  FixedEffects :: Bool -> FixedEffects b
+  FixedEffects :: IndexedEffectSet b -> FixedEffects b
   InterceptOnly :: FixedEffects b
 
-modelsIntercept :: FixedEffects b -> Bool
-modelsIntercept (FixedEffects x) = x
-modelsIntercept InterceptOnly    = True
+allFixedEffects :: (Enum b, Ord b, Bounded b) => Bool -> FixedEffects b
+allFixedEffects True = FixedEffects $ makeIndexedEffectSet [minBound ..]
+allFixedEffects False =
+  FixedEffects $ makeIndexedEffectSet $ fmap Predictor [minBound ..]
+
+modelsIntercept :: (Ord b, Enum b, Bounded b) => FixedEffects b -> Bool
+modelsIntercept (FixedEffects ef) =
+  maybe False (const True) $ effectIndex ef Intercept
+modelsIntercept InterceptOnly = True
 
 indexedFixedEffectSet
   :: forall b
    . (Ord b, Enum b, Bounded b)
   => FixedEffects b
   -> IndexedEffectSet b
-indexedFixedEffectSet InterceptOnly = makeIndexedEffectSet [Intercept]
-indexedFixedEffectSet (FixedEffects True) =
-  makeIndexedEffectSet [(minBound :: WithIntercept b) ..]
-indexedFixedEffectSet (FixedEffects False) =
-  makeIndexedEffectSet $ fmap Predictor [(minBound :: b) ..]
+indexedFixedEffectSet InterceptOnly    = makeIndexedEffectSet [Intercept]
+indexedFixedEffectSet (FixedEffects x) = x
+
+
+effectSubset
+  :: (Ord b, Enum b, Bounded b)
+  => IndexedEffectSet b
+  -> IndexedEffectSet b
+  -> Bool
+effectSubset (IndexedEffectSet sub _) (IndexedEffectSet super _) =
+  let f _ _ = True in M.isSubmapOfBy f sub super
 
 
 

@@ -41,6 +41,7 @@ import qualified Numeric.LinearAlgebra         as LA
 
 
 import qualified Data.List                     as L
+import           Data.Maybe                     ( isJust )
 import qualified Data.Sequence                 as Seq
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
@@ -62,6 +63,25 @@ data GroupFitSpec = GroupFitSpec { nCategories :: Int
                                  , groupIntercept :: Bool
                                  , groupSlopes :: Maybe (VB.Vector Bool)
                                  } deriving (Show, Eq)
+
+makeGroupFitSpec
+  :: (Ord b, Enum b, Bounded b)
+  => Int -- ^ number of categories in group
+  -> GLM.FixedEffects b
+  -> GLM.IndexedEffectSet b
+  -> Either T.Text GroupFitSpec
+makeGroupFitSpec n fixedEffects indexedGroupEffects = do
+  let indexedFixedEffects = GLM.indexedFixedEffectSet fixedEffects
+  when (not $ GLM.effectSubset indexedGroupEffects indexedFixedEffects) $ Left
+    "group contains effects not in fixed effects in \"makeGroupFitSpec\""
+  let modeled        = isJust . GLM.effectIndex indexedGroupEffects
+      groupIntercept = modeled GLM.Intercept
+      modeledNI x = if x == GLM.Intercept then False else modeled x
+      groupSlopesL = fmap modeledNI $ GLM.effectSetMembers indexedFixedEffects
+      groupSlopes  = if True `L.elem` groupSlopesL
+        then Just (VB.fromList groupSlopesL)
+        else Nothing
+  return $ GroupFitSpec n groupIntercept groupSlopes
 
 type GroupFitSpecs = VB.Vector GroupFitSpec
 

@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
@@ -30,9 +31,14 @@ import qualified Data.Vector                   as VB
 
 verbose = True
 
+throwEither :: (P.Member (P.Error T.Text) r) => Either T.Text a -> P.Sem r a
+throwEither x = case x of
+  Left  msg -> P.throw msg
+  Right x   -> return x
+
 main :: IO ()
 main = do
-{-
+
   railFrame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let railFixedEffects :: GLM.FixedEffects ()
       railFixedEffects          = GLM.InterceptOnly
@@ -43,16 +49,17 @@ main = do
                          (F.rgetField @Rail)
         )
         railFrame
-      groupFSs = VB.fromList [GroupFitSpec numInCat True Nothing]
-      th0      = setCovarianceVector groupFSs 1 0 -- LA.fromList [2]
--}
+      groupInfo = [(numInCat, GLM.makeIndexedEffectSet [GLM.Intercept])]
+--      groupFSs = VB.fromList [GroupFitSpec numInCat True Nothing]
+  let fixedEffects = railFixedEffects
+
 {-
   sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
     sleepStudyCSV
     (const True)
   let
     sleepStudyFixedEffects :: GLM.FixedEffects SleepStudyPredictor
-    sleepStudyFixedEffects    = GLM.FixedEffects True
+    sleepStudyFixedEffects    = GLM.allFixedEffects True
     (vY, mX, (vRC, numInCat)) = FL.fold
       (lmePrepFrameOne (realToFrac . F.rgetField @Reaction)
                        sleepStudyFixedEffects
@@ -60,17 +67,22 @@ main = do
                        (F.rgetField @Subject)
       )
       sleepStudyFrame
-    groupFSs = VB.fromList
-      [GroupFitSpec numInCat True (Just $ VB.fromList [False, True])]
-    th0 = setCovarianceVector groupFSs 1 0 --LA.fromList [1, 1, 0]
+    groupInfo =
+      [ ( numInCat
+        , GLM.makeIndexedEffectSet [GLM.Intercept, GLM.Predictor SleepStudyDays]
+        )
+      ]
+--    groupFSs = VB.fromList
+--      [GroupFitSpec numInCat True (Just $ VB.fromList [False, True])]
+  let fixedEffects = sleepStudyFixedEffects
 -}
-
+{-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
     oatsCSV
     (const True)
   let
     oatsFixedEffects :: GLM.FixedEffects OatsPredictor
-    oatsFixedEffects                      = GLM.FixedEffects True -- model using OatsPredictors and with intercept
+    oatsFixedEffects                      = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
     (vY, mX, (vRC, numInCat1, numInCat2)) = FL.fold
       (lmePrepFrameTwo (realToFrac . F.rgetField @Yield)
                        oatsFixedEffects
@@ -79,11 +91,21 @@ main = do
                        (F.rgetField @Block)
       )
       oatsFrame
-    groupFSs = VB.fromList
-      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
-    th0 = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
+    groupInfo =
+      [ (numInCat1, GLM.makeIndexedEffectSet [GLM.Intercept])
+      , (numInCat2, GLM.makeIndexedEffectSet [GLM.Intercept])
+      ]
+  putStrLn $ show groupInfo
+  let fixedEffects = oatsFixedEffects
+-}
+--    groupFSs = VB.fromList
+--      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
 
   resultEither <- runPIRLS_M $ do
+    groupFSs <- throwEither $ fmap VB.fromList $ traverse
+      (\(n, ige) -> makeGroupFitSpec n fixedEffects ige)
+      groupInfo
+    liftIO $ putStrLn $ show groupFSs
     let (n, p) = LA.size mX
         rcRows = VB.length vRC
     when verbose $ liftIO $ do
@@ -108,6 +130,7 @@ main = do
         (_, q)           = SLA.dim smZ
         mixedModel       = MixedModel (RegressionModel mX vY) groupFSs
         randomEffectCalc = RandomEffectCalculated smZ mkLambda
+        th0              = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ

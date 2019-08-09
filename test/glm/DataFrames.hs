@@ -132,12 +132,11 @@ lmePrepFrameOne observationF fe getPredictorF classF =
           )
         , M.size m
         )
+      getPredictorF' _   GLM.Intercept     = 1
+      getPredictorF' row (GLM.Predictor x) = getPredictorF row x
       predictorF row = LA.fromList $ case fe of
-        GLM.FixedEffects interceptB ->
-          let pfs = fmap (getPredictorF row) [minBound ..]
-          in  case interceptB of
-                True  -> 1 : pfs
-                False -> pfs
+        GLM.FixedEffects indexedFixedEffects ->
+          fmap (getPredictorF' row) $ GLM.effectSetMembers indexedFixedEffects
         GLM.InterceptOnly -> [1]
 
       foldObs   = fmap LA.fromList $ FL.premap observationF FL.list
@@ -182,13 +181,13 @@ lmePrepFrameTwo observationF fe getPredictorF classbF classcF =
             cCat <- M.lookup c mc
             return $ VB.fromList [bCat, cCat]
       in  ((VB.fromList . catMaybes $ fmap f x), M.size mb, M.size mc)
+    getPredictorF' _   GLM.Intercept     = 1
+    getPredictorF' row (GLM.Predictor x) = getPredictorF row x
     predictorF row = LA.fromList $ case fe of
-      GLM.FixedEffects interceptB ->
-        let pfs = fmap (getPredictorF row) [minBound ..]
-        in  case interceptB of
-              True  -> 1 : pfs
-              False -> pfs
+      GLM.FixedEffects indexedFixedEffects ->
+        fmap (getPredictorF' row) $ GLM.effectSetMembers indexedFixedEffects
       GLM.InterceptOnly -> [1]
+
     foldObs    = fmap LA.fromList $ FL.premap observationF FL.list
     foldPred   = fmap LA.fromRows $ FL.premap predictorF FL.list
     foldClassb = FL.premap classbF FL.list
