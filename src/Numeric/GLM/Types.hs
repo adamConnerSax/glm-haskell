@@ -41,15 +41,25 @@ instance Ord b => Ord (WithIntercept b) where
   compare (Predictor _) Intercept = GT
   compare (Predictor x) (Predictor y) = compare x y
 
-instance Enum b => Enum (WithIntercept b) where
+instance (Bounded b,Enum b) => Enum (WithIntercept b) where
   fromEnum Intercept = 0
   fromEnum (Predictor x) = 1 + fromEnum x
   toEnum 0 = Intercept
   toEnum n = Predictor $ toEnum (n - 1)
+  succ Intercept = Predictor $ toEnum 0
+  succ (Predictor x) = Predictor $ succ x
+  pred Intercept = error "pred{WithIntercept b} called on \"Intercept\""
+  pred x = toEnum $ fromEnum x - 1
+  enumFrom Intercept = Intercept : fmap Predictor [minBound..]
+  enumFrom (Predictor x) = fmap Predictor [x..]
+  enumFromThen = error "enumFromThen{WithIntercept b} called.  Likely using [a,b..] notation.  Not supported for \"WithIntercept\""
+  enumFromTo Intercept Intercept = [Intercept]
+  enumFromTo Intercept (Predictor x) = Intercept : fmap Predictor [minBound..x]
+  enumFromTo (Predictor x) (Predictor y) = fmap Predictor [x..y]
 
 instance Bounded b => Bounded (WithIntercept b) where
   minBound = Intercept
-  maxBound = Predictor maxBound
+  maxBound = Predictor (maxBound :: b)
 
 instance (Bounded b, A.Ix b) => A.Ix (WithIntercept b) where
   range (Intercept, Intercept) = [Intercept]
@@ -105,9 +115,10 @@ effectAtIndex (IndexedEffectSet _ effectByIndex) n = M.lookup n effectByIndex
 data FixedEffects b where
   FixedEffects :: IndexedEffectSet b -> FixedEffects b
   InterceptOnly :: FixedEffects b
+  deriving (Show)
 
 allFixedEffects :: (Enum b, Ord b, Bounded b) => Bool -> FixedEffects b
-allFixedEffects True = FixedEffects $ makeIndexedEffectSet [minBound ..]
+allFixedEffects True = FixedEffects $ indexedEffectSetFromList [minBound ..]
 allFixedEffects False =
   FixedEffects $ makeIndexedEffectSet $ fmap Predictor [minBound ..]
 

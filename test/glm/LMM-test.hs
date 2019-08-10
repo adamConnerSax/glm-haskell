@@ -38,7 +38,7 @@ throwEither x = case x of
 
 main :: IO ()
 main = do
-
+{-
   railFrame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let railFixedEffects :: GLM.FixedEffects ()
       railFixedEffects          = GLM.InterceptOnly
@@ -49,11 +49,10 @@ main = do
                          (F.rgetField @Rail)
         )
         railFrame
-      groupInfo = [(numInCat, GLM.makeIndexedEffectSet [GLM.Intercept])]
---      groupFSs = VB.fromList [GroupFitSpec numInCat True Nothing]
-  let fixedEffects = railFixedEffects
+      groupInfo    = [(numInCat, GLM.makeIndexedEffectSet [GLM.Intercept])]
+      fixedEffects = railFixedEffects
+-}
 
-{-
   sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
     sleepStudyCSV
     (const True)
@@ -72,10 +71,8 @@ main = do
         , GLM.makeIndexedEffectSet [GLM.Intercept, GLM.Predictor SleepStudyDays]
         )
       ]
---    groupFSs = VB.fromList
---      [GroupFitSpec numInCat True (Just $ VB.fromList [False, True])]
-  let fixedEffects = sleepStudyFixedEffects
--}
+    fixedEffects = sleepStudyFixedEffects
+
 {-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
     oatsCSV
@@ -95,17 +92,14 @@ main = do
       [ (numInCat1, GLM.makeIndexedEffectSet [GLM.Intercept])
       , (numInCat2, GLM.makeIndexedEffectSet [GLM.Intercept])
       ]
-  putStrLn $ show groupInfo
-  let fixedEffects = oatsFixedEffects
+    fixedEffects = oatsFixedEffects
 -}
 --    groupFSs = VB.fromList
 --      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
-
   resultEither <- runPIRLS_M $ do
     groupFSs <- throwEither $ fmap VB.fromList $ traverse
       (\(n, ige) -> makeGroupFitSpec n fixedEffects ige)
       groupInfo
-    liftIO $ putStrLn $ show groupFSs
     let (n, p) = LA.size mX
         rcRows = VB.length vRC
     when verbose $ liftIO $ do
@@ -135,8 +129,9 @@ main = do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem mixedModel randomEffectCalc
+    let mdVerbosity = if verbose then MDVSimple else MDVNone
     (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance
-      MDVSimple
+      mdVerbosity
       ML
       mixedModel
       randomEffectCalc
@@ -156,7 +151,7 @@ main = do
            (SD.toSparseVector vBeta2_ML)
            (SD.toSparseVector vb2_ML)
     (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance
-      MDVSimple
+      mdVerbosity
       REML
       mixedModel
       randomEffectCalc
@@ -175,21 +170,20 @@ main = do
            smZ
            (SD.toSparseVector vBeta2_REML)
            (SD.toSparseVector vb2_REML)
-
-    cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
-    (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance
-      PDVAll
-      cholmodFactor
-      REML
-      mixedModel
-      randomEffectCalc
-      (LA.fromList [0.855, 1.127])
-    liftIO $ do
-      putStrLn $ "pdTest=" ++ show pdTest
-      putStrLn $ "betaTest=" ++ show betaTest
-      putStrLn $ "uTest=" ++ show (SD.toDenseVector uTest)
-      putStrLn $ "bTest=" ++ show (SD.toDenseVector bTest)
-
+    when verbose $ do
+      cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
+      (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance
+        PDVAll
+        cholmodFactor
+        REML
+        mixedModel
+        randomEffectCalc
+        th2_REML
+      liftIO $ do
+        putStrLn $ "pdTest=" ++ show pdTest
+        putStrLn $ "betaTest=" ++ show betaTest
+        putStrLn $ "uTest=" ++ show (SD.toDenseVector uTest)
+        putStrLn $ "bTest=" ++ show (SD.toDenseVector bTest)
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
     Right ()  -> putStrLn $ "Success!"
