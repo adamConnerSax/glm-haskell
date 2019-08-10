@@ -41,7 +41,7 @@ instance Ord b => Ord (WithIntercept b) where
   compare (Predictor _) Intercept = GT
   compare (Predictor x) (Predictor y) = compare x y
 
-instance (Bounded b,Enum b) => Enum (WithIntercept b) where
+instance (Bounded b, Enum b) => Enum (WithIntercept b) where
   fromEnum Intercept = 0
   fromEnum (Predictor x) = 1 + fromEnum x
   toEnum 0 = Intercept
@@ -56,6 +56,7 @@ instance (Bounded b,Enum b) => Enum (WithIntercept b) where
   enumFromTo Intercept Intercept = [Intercept]
   enumFromTo Intercept (Predictor x) = Intercept : fmap Predictor [minBound..x]
   enumFromTo (Predictor x) (Predictor y) = fmap Predictor [x..y]
+  enumFromTo (Predictor _) Intercept = []
 
 instance Bounded b => Bounded (WithIntercept b) where
   minBound = Intercept

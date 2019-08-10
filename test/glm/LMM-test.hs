@@ -29,7 +29,7 @@ import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 
 
-verbose = True
+verbose = False
 
 throwEither :: (P.Member (P.Error T.Text) r) => Either T.Text a -> P.Sem r a
 throwEither x = case x of
