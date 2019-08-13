@@ -28,6 +28,7 @@ import qualified Data.Vinyl                    as V
 import qualified Numeric.LinearAlgebra         as LA
 
 import qualified Data.Array                    as A
+import qualified Data.List                     as L
 import qualified Data.Map                      as M
 import           Data.Maybe                     ( catMaybes )
 import qualified Data.Text                     as T
@@ -206,5 +207,65 @@ lmePrepFrameTwo observationF fe getPredictorF classbF classcF =
         <*> foldMapcM
         <*> foldClassc
         )
+
+----
+-- This assumes we are modeling all groups in g.  But we can model 0 effects??
+
+lmePrepFrame
+  :: (Bounded p, Enum p, A.Ix g, Enum g, Bounded g)
+  => (F.Record rs -> Double) -- ^ observations
+  -> GLM.FixedEffects p
+  -> (F.Record rs -> p -> Double) -- ^ predictors
+  -> A.Array g (F.Record rs -> Text)  -- ^ classifiers
+  -> FL.Fold
+       (F.Record rs)
+       ( LA.Vector Double
+       , LA.Matrix Double
+       , Maybe (GLM.RowClassifier g)
+       ) -- ^ (X,y,(row-classifier, size of class))
+lmePrepFrame observationF fe getPredictorF classF =
+  let foldMapF
+        :: Ord b
+        => ST.State (A.Array g Int) (A.Array g (M.Map T.Text Int))
+        -> (g, Text)
+        -> ST.State (A.Array g Int) (A.Array g (M.Map T.Text Int))
+      foldMapF amM (grp, label) = do
+        am <- amM
+        case M.lookup label (am A.! g) of
+          Nothing -> do
+            indexArray <- ST.get
+            let nextIndex = indexArray A.! g
+            let am' = am A.// [(g, M.insert label nextIndex am)]
+            ST.put $ indexArray A.// [(g,nextIndex + 1)]
+            return am'
+          _ -> return am
+      emptyIndexMaps = A.listArray (minBound, maxBound) $ L.repeat M.empty
+      zeroes = A.listArray (minBound, maxBound) $ L.repeat 0    
+      foldClassMapM = FL.Fold foldMapF (return emptyIndexMaps) id
+      getIndices :: A.Array g (M.Map T.Text Int) -> A.Array g T.Text -> Maybe (A.Array g Int)
+      getIndices indexMaps labels = 
+        fmap (A.array (minBound, maxBound)) $ traverse (\(g,l) -> M.lookup l (indexMaps A.! g)) labels
+      makeRowClassifier :: Traversable f
+        => A.Array g (M.Map T.Text Int)
+        -> f (A.Array g T.Text)
+        -> Maybe (GLM.RowClassifier g)
+      makeRowClassifier indexMaps labels = do
+        let sizes = fmap M.size indexMaps
+        indexed <- traverse getIndices labels
+        return $ RowClassifier sizes (VB.fromList $ FL.fold FL.list indexed)        
+      getPredictorF' _   GLM.Intercept     = 1
+      getPredictorF' row (GLM.Predictor x) = getPredictorF row x
+      predictorF row = LA.fromList $ case fe of
+        GLM.FixedEffects indexedFixedEffects ->
+          fmap (getPredictorF' row) $ GLM.effectSetMembers indexedFixedEffects
+        GLM.InterceptOnly -> [1]
+
+      foldObs   = fmap LA.fromList $ FL.premap observationF FL.list
+      foldPred  = fmap LA.fromRows $ FL.premap predictorF FL.list
+      foldClass = FL.premap classF FL.list
+      foldMapM  = FL.premap classF foldClassMapM
+      g (vY, mX, amM, ls) = (vY, mX, makeRowClassifier (ST.evalState amM zeroes) ls)
+  in  fmap g $ ((,,,) <$> foldObs <*> foldPred <*> foldMapM <*> foldClass)
+
 
 

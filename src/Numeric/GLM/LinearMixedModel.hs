@@ -25,7 +25,7 @@ import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
-
+import qualified Data.Array                    as A
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 --import qualified Data.Sparse.SpVector          as SLA
@@ -65,10 +65,10 @@ zTz is q x q, this is the part that will be sparse.
 
 
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
-thetaLowerBounds :: GroupFitSpecs -> NL.Bounds
-thetaLowerBounds levels =
+thetaLowerBounds :: GroupFitSpecs g -> NL.Bounds
+thetaLowerBounds groupFSs =
   let negInfinity :: Double = negate $ 1 / 0
-  in  NL.LowerBounds $ setCovarianceVector levels 0 negInfinity --FL.fold fld levels
+  in  NL.LowerBounds $ setCovarianceVector groupFSs 0 negInfinity --FL.fold fld levels
 
 data MinimizeDevianceVerbosity = MDVNone | MDVSimple
 
@@ -76,7 +76,7 @@ minimizeDeviance
   :: SemC r
   => MinimizeDevianceVerbosity
   -> DevianceType
-  -> MixedModel
+  -> MixedModel g i
   -> RandomEffectCalculated
   -> CovarianceVector -- ^ initial guess for theta
   -> P.Sem
@@ -130,7 +130,7 @@ report
   :: (LA.Container LA.Vector Double, SemC r)
   => Int -- ^ p
   -> Int -- ^ q
-  -> GroupFitSpecs
+  -> GroupFitSpecs g
   -> LA.Vector Double -- ^ y
   -> LA.Matrix Double -- ^ X
   -> SLA.SpMatrix Double -- ^ Z
@@ -166,7 +166,7 @@ report p q groupFSs vY mX smZ svBeta svb = do
         [0 .. (numSlopes - 1)]
   liftIO $ putStrLn $ "p=" ++ show p ++ "; q=" ++ show q
   liftIO $ reportStats "Residual" vEps
-  let numberedGroups = zip [0 ..] (VB.toList groupFSs)
+  let numberedGroups = zip [0 ..] (FL.fold FL.list groupFSs)
   liftIO $ mapM_
     (\(lN, l) -> putStrLn ("Level " ++ show lN) >> groupReport l vb)
     numberedGroups

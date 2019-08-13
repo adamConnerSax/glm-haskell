@@ -13,6 +13,8 @@ module Numeric.GLM.Types
   , addIndexedEffect
   , indexedFixedEffectSet
   , allFixedEffects
+  , ItemInfo(..)
+  , RowClassifier(..)
   )
 where
 
@@ -20,7 +22,8 @@ import qualified Control.Foldl                 as FL
 import qualified Data.Array                    as A
 import qualified Data.List                     as L
 import qualified Data.Map                      as M
-
+import qualified Data.Text as T
+import qualified Data.Vector as VB
 
 data WithIntercept b where
   Intercept :: WithIntercept b
@@ -62,12 +65,12 @@ instance Bounded b => Bounded (WithIntercept b) where
   minBound = Intercept
   maxBound = Predictor (maxBound :: b)
 
-instance (Bounded b, A.Ix b) => A.Ix (WithIntercept b) where
-  range (Intercept, Intercept) = [Intercept]
+instance (Bounded b, Enum b, A.Ix b) => A.Ix (WithIntercept b) where
+{-  range (Intercept, Intercept) = [Intercept]
   range (Intercept, (Predictor x)) = Intercept : fmap Predictor (A.range (minBound, x))
   range ((Predictor x), (Predictor y)) = fmap Predictor $ A.range (x, y)
-  range (_, _) = []
-
+  range (_, _) = [] -}
+  range (a,b) = [a..b]
   index (Intercept, _) Intercept = 0
   index (Intercept, Intercept) (Predictor _) = error "Ix{WithIntercept b}.index: Index out of range.  \"index Intercept Intercept (Predictor _)\" called."
   index (Intercept, (Predictor x)) (Predictor y) = 1 + A.index (minBound, x) y
@@ -136,7 +139,6 @@ indexedFixedEffectSet
 indexedFixedEffectSet InterceptOnly    = makeIndexedEffectSet [Intercept]
 indexedFixedEffectSet (FixedEffects x) = x
 
-
 effectSubset
   :: (Ord b, Enum b, Bounded b)
   => IndexedEffectSet b
@@ -145,6 +147,13 @@ effectSubset
 effectSubset (IndexedEffectSet sub _) (IndexedEffectSet super _) =
   let f _ _ = True in M.isSubmapOfBy f sub super
 
+{-
+g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
+i is the item within the group and we need to map that to Int as well. E.g., "MA" -> 0
+-}
+data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text }
+data RowClassifier g where
+  RowClassifier :: (A.Ix g, Bounded g, Enum g) => A.Array g Int -> VB.Vector (A.Array g ItemInfo) -> RowClassifier g
 
 
 
