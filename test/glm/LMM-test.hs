@@ -22,6 +22,7 @@ import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
+import qualified Data.Array                    as A
 import qualified Data.Sparse.Common            as SLA
 import qualified Data.List                     as L
 import qualified Data.Sequence                 as Seq
@@ -35,6 +36,9 @@ throwEither :: (P.Member (P.Error T.Text) r) => Either T.Text a -> P.Sem r a
 throwEither x = case x of
   Left  msg -> P.throw msg
   Right x   -> return x
+
+throwMaybe :: (P.Member (P.Error T.Text) r) => T.Text -> Maybe a -> P.Sem r a
+throwMaybe msg x = throwEither $ maybe (Left msg) Right x
 
 main :: IO ()
 main = do
@@ -59,10 +63,17 @@ main = do
   let
     sleepStudyFixedEffects :: GLM.FixedEffects SleepStudyPredictor
     sleepStudyFixedEffects    = GLM.allFixedEffects True
+    (vY, mX, rcM) = FL.fold
+      (lmePrepFrame (realToFrac . F.rgetField @Reaction)
+        sleepStudyFixedEffects
+        sleepStudyPredictor
+        sleepStudyGroupLabels)
+      sleepStudyFrame
+{-      
     (vY, mX, (vRC, numInCat)) = FL.fold
       (lmePrepFrameOne (realToFrac . F.rgetField @Reaction)
                        sleepStudyFixedEffects
-                       getSleepStudyPredictor
+                       sleepStudyPredictor
                        (F.rgetField @Subject)
       )
       sleepStudyFrame
@@ -71,6 +82,8 @@ main = do
         , GLM.makeIndexedEffectSet [GLM.Intercept, GLM.Predictor SleepStudyDays]
         )
       ]
+-}
+    groupInfo = sleepStudyGroupInfo
     fixedEffects = sleepStudyFixedEffects
 
 {-
@@ -97,13 +110,15 @@ main = do
 --    groupFSs = VB.fromList
 --      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
   resultEither <- runPIRLS_M $ do
-    groupFSs <- throwEither $ fmap VB.fromList $ traverse
+    rowClassifier  <- throwMaybe "row classifier build failed." rcM
+    let groupInfoList = zip (fmap snd (A.assocs $ GLM.groupSizes rowClassifier)) (fmap snd (A.assocs groupInfo))
+    groupFSs <- throwEither $ fmap (A.listArray (minBound, maxBound)) $ traverse
       (\(n, ige) -> makeGroupFitSpec n fixedEffects ige)
-      groupInfo
+      groupInfoList
     let (n, p) = LA.size mX
-        rcRows = VB.length vRC
+        rcRows = VB.length $ GLM.rowInfos rowClassifier
     when verbose $ liftIO $ do
-      putStrLn $ "classifiers=" ++ show vRC
+      putStrLn $ "classifiers=" ++ show rowClassifier
     when (rcRows /= n)
       $  P.throw
       $  "Only "
@@ -111,7 +126,7 @@ main = do
       <> " in vRC but there are "
       <> (T.pack $ show n)
       <> " rows in the data!"
-    let rowClassifier n = vRC VB.! n
+    --let rowClassifier n = vRC VB.! n
     when verbose $ liftIO $ do
       putStrLn $ show $ fmap colsForGroup groupFSs
       putStrLn $ "y=" ++ show vY
@@ -122,7 +137,7 @@ main = do
 --        makeST           = makeSTF groupFSs
         mkLambda         = makeLambda groupFSs
         (_, q)           = SLA.dim smZ
-        mixedModel       = MixedModel (RegressionModel mX vY) groupFSs
+        mixedModel       = MixedModel (RegressionModel fixedEffects mX vY) groupFSs
         randomEffectCalc = RandomEffectCalculated smZ mkLambda
         th0              = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do

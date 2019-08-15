@@ -157,7 +157,7 @@ a column with the predictor from X for a random
 slope.
 -}
 makeZ
-  :: forall g i. (Enum g, Bounded g, A.Ix g)
+  :: forall g. (Enum g, Bounded g, A.Ix g)
   => FixedPredictors
   -> GroupFitSpecs g
   -> GLM.RowClassifier g

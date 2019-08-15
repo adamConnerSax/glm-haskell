@@ -44,8 +44,14 @@ railCSV = "data/Rail.csv"
 F.tableTypes "RailRow" "data/Rail.csv"
 
 type RailEffect = GLM.WithIntercept ()
-getRailPredictor :: RailRow -> () -> Double
-getRailPredictor _ _ = undefined -- we need something of this type but if this gets called something has gone wrong!
+railPredictor :: RailRow -> () -> Double
+railPredictor _ _ = undefined -- we need something of this type but if this gets called something has gone wrong!
+
+data RailGroup = RG_Rail deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+railGroupLabels :: A.Array RailGroup (RailRow -> T.Text)
+railGroupLabels = A.array (minBound, maxBound) [(RG_Rail, F.rgetField @Rail)]
+
+--
 
 sleepStudyCSV = "data/SleepStudy.csv"
 F.tableTypes "SleepStudyRow" "data/SleepStudy.csv"
@@ -53,8 +59,17 @@ F.tableTypes "SleepStudyRow" "data/SleepStudy.csv"
 data SleepStudyPredictor = SleepStudyDays deriving (Eq, Ord, Enum, Bounded, Show, A.Ix)
 type SleepStudyEffect = GLM.WithIntercept SleepStudyPredictor
 
-getSleepStudyPredictor :: SleepStudyRow -> SleepStudyPredictor -> Double
-getSleepStudyPredictor r _ = realToFrac $ F.rgetField @Days r
+sleepStudyPredictor :: SleepStudyRow -> SleepStudyPredictor -> Double
+sleepStudyPredictor r _ = realToFrac $ F.rgetField @Days r
+
+data SleepStudyGroup = SSG_Subject deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+sleepStudyGroupLabels :: A.Array SleepStudyGroup (SleepStudyRow -> T.Text)
+sleepStudyGroupLabels = A.array (minBound, maxBound) [(SSG_Subject, T.pack . show . F.rgetField @Subject)]
+
+sleepStudyGroupInfo :: A.Array SleepStudyGroup (GLM.IndexedEffectSet SleepStudyPredictor)
+sleepStudyGroupInfo = A.array (minBound, maxBound)
+  [(SSG_Subject, GLM.makeIndexedEffectSet [GLM.Intercept, GLM.Predictor SleepStudyDays])]
+--
 
 oatsCSV = "data/Oats.csv"
 F.tableTypes "OatsRow" "data/Oats.csv"
@@ -64,6 +79,14 @@ type OatsEffect = GLM.WithIntercept OatsPredictor
 
 getOatsPredictor :: OatsRow -> OatsPredictor -> Double
 getOatsPredictor r _ = F.rgetField @Nitro r
+
+data OatsGroup = OG_Block | OG_VarietyBlock deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+oatsGroupLabels :: A.Array OatsGroup (OatsRow -> T.Text)
+oatsGroupLabels = A.array (minBound, maxBound) [(OG_Block
+                                                , F.rgetField @Block)
+                                               ,(OG_VarietyBlock
+                                                , (\r -> F.rgetField @Variety r <> "_" <> F.rgetField @Block r))
+                                               ]
 
 loadToFrame
   :: forall rs
@@ -212,7 +235,7 @@ lmePrepFrameTwo observationF fe getPredictorF classbF classcF =
 -- This assumes we are modeling all groups in g.  But we can model 0 effects??
 
 lmePrepFrame
-  :: (Bounded p, Enum p, A.Ix g, Enum g, Bounded g)
+  :: forall p g rs. (Bounded p, Enum p, A.Ix g, Enum g, Bounded g)
   => (F.Record rs -> Double) -- ^ observations
   -> GLM.FixedEffects p
   -> (F.Record rs -> p -> Double) -- ^ predictors
@@ -224,35 +247,38 @@ lmePrepFrame
        , Maybe (GLM.RowClassifier g)
        ) -- ^ (X,y,(row-classifier, size of class))
 lmePrepFrame observationF fe getPredictorF classF =
-  let foldMapF
-        :: Ord b
-        => ST.State (A.Array g Int) (A.Array g (M.Map T.Text Int))
-        -> (g, Text)
-        -> ST.State (A.Array g Int) (A.Array g (M.Map T.Text Int))
-      foldMapF amM (grp, label) = do
-        am <- amM
-        case M.lookup label (am A.! g) of
-          Nothing -> do
-            indexArray <- ST.get
-            let nextIndex = indexArray A.! g
-            let am' = am A.// [(g, M.insert label nextIndex am)]
-            ST.put $ indexArray A.// [(g,nextIndex + 1)]
-            return am'
-          _ -> return am
+  let foldMapF :: ST.State (A.Array g Int, A.Array g (M.Map T.Text Int)) ()
+               -> A.Array g T.Text 
+               -> ST.State (A.Array g Int, A.Array g (M.Map T.Text Int)) ()
+      foldMapF amM labels = do
+--        am <- amM
+        let addOne (grp, label) = do
+              (indexArray, am) <- ST.get
+              let groupIndexMap = am A.! grp
+              case M.lookup label groupIndexMap of
+                Nothing -> do                  
+                  let nextIndex = indexArray A.! grp
+                      am' = am A.// [(grp, M.insert label nextIndex groupIndexMap)]
+                  ST.put $ (indexArray A.// [(grp, nextIndex + 1)], am')
+                  return ()
+                _ -> return ()
+        traverse addOne $ A.assocs labels
+        return ()
       emptyIndexMaps = A.listArray (minBound, maxBound) $ L.repeat M.empty
       zeroes = A.listArray (minBound, maxBound) $ L.repeat 0    
-      foldClassMapM = FL.Fold foldMapF (return emptyIndexMaps) id
-      getIndices :: A.Array g (M.Map T.Text Int) -> A.Array g T.Text -> Maybe (A.Array g Int)
-      getIndices indexMaps labels = 
-        fmap (A.array (minBound, maxBound)) $ traverse (\(g,l) -> M.lookup l (indexMaps A.! g)) labels
+      foldClassMapM = FL.Fold foldMapF (return ()) id
+      getIndices :: A.Array g (M.Map T.Text Int) -> A.Array g T.Text -> Maybe (A.Array g GLM.ItemInfo)
+      getIndices indexMaps labels =
+        let g (grp, label) = GLM.ItemInfo <$> M.lookup label (indexMaps A.! grp) <*> pure label
+        in  fmap (A.listArray (minBound, maxBound)) $ traverse g $ A.assocs labels
       makeRowClassifier :: Traversable f
         => A.Array g (M.Map T.Text Int)
         -> f (A.Array g T.Text)
         -> Maybe (GLM.RowClassifier g)
       makeRowClassifier indexMaps labels = do
         let sizes = fmap M.size indexMaps
-        indexed <- traverse getIndices labels
-        return $ RowClassifier sizes (VB.fromList $ FL.fold FL.list indexed)        
+        indexed <- traverse (getIndices indexMaps) labels
+        return $ GLM.RowClassifier sizes (VB.fromList $ FL.fold FL.list indexed)        
       getPredictorF' _   GLM.Intercept     = 1
       getPredictorF' row (GLM.Predictor x) = getPredictorF row x
       predictorF row = LA.fromList $ case fe of
@@ -262,9 +288,9 @@ lmePrepFrame observationF fe getPredictorF classF =
 
       foldObs   = fmap LA.fromList $ FL.premap observationF FL.list
       foldPred  = fmap LA.fromRows $ FL.premap predictorF FL.list
-      foldClass = FL.premap classF FL.list
-      foldMapM  = FL.premap classF foldClassMapM
-      g (vY, mX, amM, ls) = (vY, mX, makeRowClassifier (ST.evalState amM zeroes) ls)
+      foldClass = FL.premap (sequenceA classF) FL.list
+      foldMapM  = FL.premap (sequenceA classF) foldClassMapM
+      g (vY, mX, amM, ls) = (vY, mX, makeRowClassifier (snd $ ST.execState amM (zeroes, emptyIndexMaps)) ls)
   in  fmap g $ ((,,,) <$> foldObs <*> foldPred <*> foldMapM <*> foldClass)
 
 

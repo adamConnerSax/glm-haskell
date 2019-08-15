@@ -15,6 +15,8 @@ module Numeric.GLM.Types
   , allFixedEffects
   , ItemInfo(..)
   , RowClassifier(..)
+  , groupSizes
+  , rowInfos
   )
 where
 
@@ -149,11 +151,18 @@ effectSubset (IndexedEffectSet sub _) (IndexedEffectSet super _) =
 
 {-
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
-i is the item within the group and we need to map that to Int as well. E.g., "MA" -> 0
 -}
-data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text }
+data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
 data RowClassifier g where
   RowClassifier :: (A.Ix g, Bounded g, Enum g) => A.Array g Int -> VB.Vector (A.Array g ItemInfo) -> RowClassifier g
 
+instance Show g => Show (RowClassifier g) where
+  show (RowClassifier sizes infos) = "RowClassifier " ++ show sizes ++ " " ++ show infos
+
+groupSizes :: RowClassifier g -> A.Array g Int
+groupSizes (RowClassifier sizes _) = sizes
+
+rowInfos :: RowClassifier g -> VB.Vector (A.Array g ItemInfo)
+rowInfos (RowClassifier _ infos) = infos
 
 
