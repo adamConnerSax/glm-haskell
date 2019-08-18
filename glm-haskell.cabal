@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a1a4b8087a9fe63f7020934edef3c78579c6e5274bce4c0b70257dc537a8c7bf
+-- hash: 9cc1b8f51faee6d54009c4cd225ede76576688504c0330c703ad4feccba9c83e
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -35,6 +35,7 @@ flag dump-core
 
 library
   exposed-modules:
+      Data.IndexedSet
       GLM.Internal.Log
       Numeric.GLM.GeneralizedMixedModel
       Numeric.GLM.LinearMixedModel
@@ -65,6 +66,7 @@ library
     , base >=4.7 && <5
     , containers >=0.5.0.0 && <0.7
     , exceptions >=0.10.0 && <0.11
+    , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.20.0 && <0.21
@@ -107,6 +109,7 @@ test-suite CHOLMOD-test
     , base >=4.7 && <5
     , containers >=0.5.0.0 && <0.7
     , exceptions >=0.10.0 && <0.11
+    , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
     , glm-haskell
     , hcholmod
@@ -138,6 +141,7 @@ test-suite LMM-test
     , base >=4.7 && <5
     , containers >=0.5.0.0 && <0.7
     , exceptions >=0.10.0 && <0.11
+    , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
     , glm-haskell
     , hcholmod >=0.1.0 && <0.2

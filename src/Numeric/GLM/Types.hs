@@ -5,27 +5,23 @@ module Numeric.GLM.Types
   ( WithIntercept(..)
   , IndexedEffectSet
   , FixedEffects(..)
-  , effectIndex
-  , effectAtIndex
-  , effectSetMembers
-  , effectSubset
-  , makeIndexedEffectSet
-  , addIndexedEffect
   , indexedFixedEffectSet
   , allFixedEffects
   , ItemInfo(..)
   , RowClassifier(..)
-  , groupSizes
+  , groupIndices
   , rowInfos
   )
 where
+
+import qualified Data.IndexedSet               as IS
 
 import qualified Control.Foldl                 as FL
 import qualified Data.Array                    as A
 import qualified Data.List                     as L
 import qualified Data.Map                      as M
-import qualified Data.Text as T
-import qualified Data.Vector as VB
+import qualified Data.Text                     as T
+import qualified Data.Vector                   as VB
 
 data WithIntercept b where
   Intercept :: WithIntercept b
@@ -87,7 +83,9 @@ instance (Bounded b, Enum b, A.Ix b) => A.Ix (WithIntercept b) where
   inRange ((Predictor x), (Predictor y)) (Predictor z) = A.inRange (x, y) z
   inRange (_, _) _ = False
 
--- don't export this constructor !!
+type IndexedEffectSet b = IS.IndexedSet (WithIntercept b)
+
+{-
 data IndexedEffectSet b where
   IndexedEffectSet :: M.Map (WithIntercept b) Int -> M.Map Int (WithIntercept b) -> IndexedEffectSet b
     deriving (Show)
@@ -116,6 +114,7 @@ effectIndex (IndexedEffectSet indexByEffect _) x = M.lookup x indexByEffect
 
 effectAtIndex :: Ord b => IndexedEffectSet b -> Int -> Maybe (WithIntercept b)
 effectAtIndex (IndexedEffectSet _ effectByIndex) n = M.lookup n effectByIndex
+-}
 
 -- serves as a holder for the intercept Choice and a proxy for the type b
 data FixedEffects b where
@@ -124,45 +123,39 @@ data FixedEffects b where
   deriving (Show)
 
 allFixedEffects :: (Enum b, Ord b, Bounded b) => Bool -> FixedEffects b
-allFixedEffects True = FixedEffects $ indexedEffectSetFromList [minBound ..]
+allFixedEffects True = FixedEffects $ IS.fromList [minBound ..]
 allFixedEffects False =
-  FixedEffects $ makeIndexedEffectSet $ fmap Predictor [minBound ..]
+  FixedEffects $ IS.fromList $ fmap Predictor [minBound ..]
 
 modelsIntercept :: (Ord b, Enum b, Bounded b) => FixedEffects b -> Bool
 modelsIntercept (FixedEffects ef) =
-  maybe False (const True) $ effectIndex ef Intercept
+  maybe False (const True) $ IS.index ef Intercept
 modelsIntercept InterceptOnly = True
 
 indexedFixedEffectSet
-  :: forall b
-   . (Ord b, Enum b, Bounded b)
+  :: (Ord b, Enum b, Bounded b)
   => FixedEffects b
-  -> IndexedEffectSet b
-indexedFixedEffectSet InterceptOnly    = makeIndexedEffectSet [Intercept]
+  -> IS.IndexedSet (WithIntercept b)
+indexedFixedEffectSet InterceptOnly    = IS.fromList [Intercept]
 indexedFixedEffectSet (FixedEffects x) = x
 
-effectSubset
-  :: (Ord b, Enum b, Bounded b)
-  => IndexedEffectSet b
-  -> IndexedEffectSet b
-  -> Bool
-effectSubset (IndexedEffectSet sub _) (IndexedEffectSet super _) =
-  let f _ _ = True in M.isSubmapOfBy f sub super
 
+data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
 {-
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
+The IndexedSet has our map to and from Int
+The Vector of Vectors has our membership info where the vector for each row is indexed as in the indexed set
 -}
-data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
 data RowClassifier g where
-  RowClassifier :: (A.Ix g, Bounded g, Enum g) => A.Array g Int -> VB.Vector (A.Array g ItemInfo) -> RowClassifier g
+  RowClassifier :: (A.Ix g, Bounded g, Enum g) => IS.IndexedSet g -> VB.Vector (VB.Vector ItemInfo) -> RowClassifier g
 
 instance Show g => Show (RowClassifier g) where
   show (RowClassifier sizes infos) = "RowClassifier " ++ show sizes ++ " " ++ show infos
 
-groupSizes :: RowClassifier g -> A.Array g Int
-groupSizes (RowClassifier sizes _) = sizes
+groupIndices :: RowClassifier g -> IS.IndexedSet g
+groupIndices (RowClassifier groupIndices _) = groupIndices
 
-rowInfos :: RowClassifier g -> VB.Vector (A.Array g ItemInfo)
+rowInfos :: RowClassifier g -> VB.Vector (VB.Vector ItemInfo)
 rowInfos (RowClassifier _ infos) = infos
 
 
