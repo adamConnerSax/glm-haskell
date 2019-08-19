@@ -48,25 +48,27 @@ main = do
 {-
   railFrame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let railFixedEffects :: GLM.FixedEffects ()
-      railFixedEffects          = GLM.InterceptOnly
-      (vY, mX, (vRC, numInCat)) = FL.fold
-        (lmePrepFrameOne (realToFrac . F.rgetField @Travel)
-                         railFixedEffects
-                         getRailPredictor
-                         (F.rgetField @Rail)
+      railFixedEffects = GLM.InterceptOnly
+      railGroups       = IS.fromList [RG_Rail]
+      (vY, mX, rcM)    = FL.fold
+        (lmePrepFrame (realToFrac . F.rgetField @Travel)
+                      railFixedEffects
+                      railGroups
+                      railPredictor
+                      railGroupLabels
         )
         railFrame
-      groupInfo    = [(numInCat, GLM.makeIndexedEffectSet [GLM.Intercept])]
-      fixedEffects = railFixedEffects
+      groupEffectMap = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
+      fixedEffects   = railFixedEffects
 -}
-
+{-
   sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
     sleepStudyCSV
     (const True)
   let
-    sleepStudyGroups = IS.fromList [SSG_Subject]
     sleepStudyFixedEffects :: GLM.FixedEffects SleepStudyPredictor
     sleepStudyFixedEffects = GLM.allFixedEffects True
+    sleepStudyGroups = IS.fromList [SSG_Subject]
     (vY, mX, rcM)          = FL.fold
       (lmePrepFrame (realToFrac . F.rgetField @Reaction)
                     sleepStudyFixedEffects
@@ -78,30 +80,28 @@ main = do
     groupEffectMap = M.fromList
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
     fixedEffects = sleepStudyFixedEffects
+-}
 
-{-
   oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
     oatsCSV
     (const True)
-  let
-    oatsFixedEffects :: GLM.FixedEffects OatsPredictor
-    oatsFixedEffects                      = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
-    (vY, mX, (vRC, numInCat1, numInCat2)) = FL.fold
-      (lmePrepFrameTwo (realToFrac . F.rgetField @Yield)
-                       oatsFixedEffects
-                       getOatsPredictor
-                       (\r -> (F.rgetField @Variety r, F.rgetField @Block r))
-                       (F.rgetField @Block)
-      )
-      oatsFrame
-    groupInfo =
-      [ (numInCat1, GLM.makeIndexedEffectSet [GLM.Intercept])
-      , (numInCat2, GLM.makeIndexedEffectSet [GLM.Intercept])
-      ]
-    fixedEffects = oatsFixedEffects
--}
---    groupFSs = VB.fromList
---      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
+  let oatsFixedEffects :: GLM.FixedEffects OatsPredictor
+      oatsFixedEffects = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
+      oatsGroups       = IS.fromList [OG_Block, OG_VarietyBlock]
+      (vY, mX, rcM)    = FL.fold
+        (lmePrepFrame (realToFrac . F.rgetField @Yield)
+                      oatsFixedEffects
+                      oatsGroups
+                      getOatsPredictor
+                      oatsGroupLabels
+        )
+        oatsFrame
+      groupEffectMap = M.fromList
+        [ (OG_Block       , IS.fromList [GLM.Intercept])
+        , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
+        ]
+      fixedEffects = oatsFixedEffects
+
   resultEither <- runPIRLS_M $ do
     rowClassifier <- throwEither rcM
     groupInfoList <- throwMaybe "missing group in groupEffectMap" $ do
@@ -110,7 +110,7 @@ main = do
             M.lookup grp (GLM.groupSizes rowClassifier) >>= return . (grp, , ie)
           )
         $ M.toList groupEffectMap
-    groupFSs <- throwEither $ fmap M.fromList $ traverse
+    groupFSM <- throwEither $ fmap M.fromList $ traverse
       (\(grp, n, ige) ->
         makeGroupFitSpec n fixedEffects ige >>= return . (grp, )
       )
@@ -128,18 +128,18 @@ main = do
       <> " rows in the data!"
     --let rowClassifier n = vRC VB.! n
     when verbose $ liftIO $ do
-      putStrLn $ show $ fmap colsForGroup groupFSs
+      putStrLn $ show $ fmap colsForGroup groupFSM
       putStrLn $ "y=" ++ show vY
       putStrLn "X="
       LA.disp 2 mX
-      putStrLn $ "levels=" ++ show groupFSs
+      putStrLn $ "levels=" ++ show groupFSM
     smZ <- throwMaybe "Error making Z, the random effect model matrix"
-      $ makeZ mX groupFSs rowClassifier
-    let mkLambda         = makeLambda groupFSs
+      $ makeZ mX groupFSM rowClassifier
+    let mkLambda         = makeLambda groupFSM
         (_, q)           = SLA.dim smZ
-        mixedModel = MixedModel (RegressionModel fixedEffects mX vY) groupFSs
+        mixedModel = MixedModel (RegressionModel fixedEffects mX vY) groupFSM
         randomEffectCalc = RandomEffectCalculated smZ mkLambda
-        th0              = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
+        th0              = setCovarianceVector groupFSM 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
@@ -159,7 +159,7 @@ main = do
       putStrLn $ "b=" ++ show vb2_ML
     report p
            q
-           groupFSs
+           groupFSM
            vY
            mX
            smZ
@@ -179,7 +179,7 @@ main = do
       putStrLn $ "b=" ++ show vb2_REML
     report p
            q
-           groupFSs
+           groupFSM
            vY
            mX
            smZ
