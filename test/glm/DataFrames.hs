@@ -71,16 +71,6 @@ sleepStudyGroupLabels :: SleepStudyRow -> SleepStudyGroup -> T.Text
 sleepStudyGroupLabels row group = case group of
   SSG_Subject -> T.pack . show $ F.rgetField @Subject row
 
-{-
-sleepStudyGroupInfo
-  :: A.Array SleepStudyGroup (GLM.IndexedEffectSet SleepStudyPredictor)
-sleepStudyGroupInfo = A.array
-  (minBound, maxBound)
-  [ ( SSG_Subject
-    , GLM.makeIndexedEffectSet [GLM.Intercept, GLM.Predictor SleepStudyDays]
-    )
-  ]
--}
 --
 
 oatsCSV = "data/Oats.csv"
