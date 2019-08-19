@@ -12,6 +12,7 @@ import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
 import qualified Numeric.SparseDenseConversions
                                                as SD
 import qualified Numeric.GLM.Types             as GLM
+import qualified Data.IndexedSet               as IS
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
@@ -42,6 +43,7 @@ import qualified Numeric.LinearAlgebra         as LA
 
 
 import qualified Data.List                     as L
+import qualified Data.Map                      as M
 import           Data.Maybe                     ( isJust )
 import qualified Data.Sequence                 as Seq
 import qualified Data.Text                     as T
@@ -73,20 +75,20 @@ makeGroupFitSpec
   -> Either T.Text GroupFitSpec
 makeGroupFitSpec n fixedEffects indexedGroupEffects = do
   let indexedFixedEffects = GLM.indexedFixedEffectSet fixedEffects
-  when (not $ GLM.effectSubset indexedGroupEffects indexedFixedEffects) $ Left
+  when (not $ IS.subset indexedGroupEffects indexedFixedEffects) $ Left
     "group contains effects not in fixed effects in \"makeGroupFitSpec\""
-  let modeled        = isJust . GLM.effectIndex indexedGroupEffects
+  let modeled        = isJust . IS.index indexedGroupEffects
       groupIntercept = modeled GLM.Intercept
       modeledNI x = if x == GLM.Intercept then False else modeled x
-      groupSlopesL = fmap modeledNI $ GLM.effectSetMembers indexedFixedEffects
+      groupSlopesL = fmap modeledNI $ IS.members indexedFixedEffects
       groupSlopes  = if True `L.elem` groupSlopesL
         then Just (VB.fromList groupSlopesL)
         else Nothing
   return $ GroupFitSpec n groupIntercept groupSlopes
 
-type GroupFitSpecs g = A.Array g GroupFitSpec --VB.Vector GroupFitSpec
+type GroupFitSpecMap g = M.Map g GroupFitSpec --VB.Vector GroupFitSpec
 
-data MixedModel b g = MixedModel (RegressionModel b) (GroupFitSpecs g)
+data MixedModel b g = MixedModel (RegressionModel b) (GroupFitSpecMap g)
 
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVector = LA.Vector Double
@@ -114,9 +116,11 @@ colsForGroup l = nCategories l * effectsForGroup l
 -- catN :: RowClass
 --type RowClassifier g = RowIndex -> A.ArrayVB.Vector Int
 
-categoryNumber :: A.Ix g => GLM.RowClassifier g -> Int -> g -> Int
-categoryNumber (GLM.RowClassifier _ rowClassifierV) rowIndex group =
-  GLM.itemIndex $ (rowClassifierV VB.! rowIndex) A.! group --rowIndex VB.! levelIndex
+categoryNumber :: A.Ix g => GLM.RowClassifier g -> Int -> g -> Maybe Int
+categoryNumber (GLM.RowClassifier groupIndices sizes rowClassifierV) rowIndex group
+  = do
+    vectorIndex <- groupIndices `IS.index` group
+    return $ GLM.itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex
 
 data ParameterEstimates =
   ParameterEstimates
@@ -131,8 +135,8 @@ type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
 runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
 
-setCovarianceVector :: GroupFitSpecs g -> Double -> Double -> LA.Vector Double
-setCovarianceVector groupFS diag offDiag = FL.fold fld groupFS
+setCovarianceVector :: GroupFitSpecMap g -> Double -> Double -> LA.Vector Double
+setCovarianceVector groupFSM diag offDiag = FL.fold fld groupFSM
  where
   fld = FL.Fold
     (\bs l ->
@@ -157,62 +161,61 @@ a column with the predictor from X for a random
 slope.
 -}
 makeZ
-  :: forall g. (Enum g, Bounded g, A.Ix g)
+  :: forall g
+   . (Enum g, Bounded g, A.Ix g)
   => FixedPredictors
-  -> GroupFitSpecs g
+  -> GroupFitSpecMap g
   -> GLM.RowClassifier g
-  -> RandomEffectModelMatrix
-makeZ mX groupFSs rc =
+  -> Maybe RandomEffectModelMatrix
+makeZ mX groupFSM rc = do
   let
     (nO, nP) = LA.size mX
-    k        = FL.fold FL.length groupFSs -- number of levels
-    groupSize g = nCategories (groupFSs A.! g)
-    q = FL.fold FL.sum $ fmap colsForGroup groupFSs -- total number of columns in Z
+    k        = FL.fold FL.length groupFSM -- number of levels
+--    groupSize g = fmap nCategories $ M.lookup g groupFSM 
+    q        = FL.fold FL.sum $ fmap colsForGroup groupFSM -- total number of columns in Z
     predictor rowIndex fixedEffectIndex =
       mX `LA.atIndex` (rowIndex, fixedEffectIndex)
     -- construct Z for level as a fold over rows
-    entries :: Int -> g -> GroupFitSpec -> Int -> [(Int, Int, Double)]
-    entries colOffset group groupFS rowIndex
-      = let
-          entryOffset =
-            colOffset
-              + ( effectsForGroup groupFS
-                * categoryNumber rc rowIndex group
-                )
-          (intercept, slopeOffset) = if groupIntercept groupFS
-            then ([(rowIndex, entryOffset, 1)], entryOffset + 1)
-            else ([], entryOffset)
-          slopeF :: FL.Fold (Bool, Int) [(Int, Int, Double)]
-          slopeF = FL.Fold
-            (\(mes, ziCol) (b, fixedEffectIndex) -> if b
-              then
-                ( (rowIndex, ziCol, predictor rowIndex fixedEffectIndex) : mes
-                , ziCol + 1
-                )
-              else (mes, ziCol)
-            )
-            ([], slopeOffset)
-            fst
-          slopes = case groupSlopes groupFS of
-            Just slopeV -> FL.fold slopeF $ VB.zip slopeV (VB.generate nP id)
-            Nothing     -> []
-        in
-          intercept ++ slopes
-    ziFold group groupOffset groupFS =
+    entries :: Int -> g -> GroupFitSpec -> Int -> Maybe [(Int, Int, Double)]
+    entries colOffset group groupFS rowIndex = do
+      categoryN <- categoryNumber rc rowIndex group
+      let
+        entryOffset = colOffset + (effectsForGroup groupFS * categoryN)
+        (intercept, slopeOffset) = if groupIntercept groupFS
+          then ([(rowIndex, entryOffset, 1)], entryOffset + 1)
+          else ([], entryOffset)
+        slopeF :: FL.Fold (Bool, Int) [(Int, Int, Double)]
+        slopeF = FL.Fold
+          (\(mes, ziCol) (b, fixedEffectIndex) -> if b
+            then
+              ( (rowIndex, ziCol, predictor rowIndex fixedEffectIndex) : mes
+              , ziCol + 1
+              )
+            else (mes, ziCol)
+          )
+          ([], slopeOffset)
+          fst
+        slopes = case groupSlopes groupFS of
+          Just slopeV -> FL.fold slopeF $ VB.zip slopeV (VB.generate nP id)
+          Nothing     -> []
+      return $ intercept ++ slopes
+    ziFoldM
+      :: g -> Int -> GroupFitSpec -> FL.FoldM Maybe Int [(Int, Int, Double)]
+    ziFoldM group groupOffset groupFS =
       let q = colsForGroup groupFS
-      in  FL.Fold (\mes n -> mes ++ entries groupOffset group groupFS n)
-                  []
-                  id
-    groups = [minBound..maxBound] --Numbers = VB.generate (VB.length groupFSs) id
-    groupOffsets = A.elems $ FL.prescan FL.sum $ fmap colsForGroup groupFSs
-    zis          = concat $ FL.fold
-      ( sequenceA
-      $ fmap (\(group, gOffset, gSpec) -> ziFold group gOffset gSpec)
-      $ zip3 groups groupOffsets (A.elems groupFSs)
-      )
-      [0 .. (nO - 1)]
-  in
-    SLA.fromListSM (nO, q) zis
+      in  FL.FoldM
+            (\mes n -> fmap (mes ++) $ entries groupOffset group groupFS n)
+            (Just [])
+            return
+    groups       = IS.members $ GLM.groupIndices rc -- [minBound .. maxBound] --Numbers = VB.generate (VB.length groupFSs) id
+    groupOffsets = FL.prescan FL.sum $ fmap colsForGroup $ M.elems groupFSM
+  zisM <- FL.foldM
+    ( sequenceA
+    $ fmap (\(group, gOffset, gSpec) -> ziFoldM group gOffset gSpec)
+    $ zip3 groups groupOffsets (M.elems groupFSM)
+    )
+    [0 .. (nO - 1)]
+  return $ SLA.fromListSM (nO, q) $ concat zisM
 
 -- TODO: Add levels checks
 -- TODO: Add Lambda checks
@@ -241,13 +244,13 @@ checkProblem (MixedModel (RegressionModel _ mX vY) _) (RandomEffectCalculated sm
 -- Lambda is built from lower-triangular blocks
 -- which are p_i x p_i.  Theta contains the values
 -- for each block, in col major order
-makeLambda :: GroupFitSpecs g -> (CovarianceVector -> Lambda)
-makeLambda groupFSs =
+makeLambda :: GroupFitSpecMap g -> (CovarianceVector -> Lambda)
+makeLambda groupFSM =
   let blockF vTH = FL.Fold
         (\(bs, vx) l' -> ((l', vx) : bs, VS.drop (effectsForGroup l') vx))
         ([], vTH)
         (reverse . fst)
-      blockData vTh = FL.fold (blockF vTh) groupFSs
+      blockData vTh = FL.fold (blockF vTh) groupFSM
       templateBlock l vTh =
         let pl  = effectsForGroup l
             lTh = VS.toList vTh
@@ -366,14 +369,14 @@ data CholeskySolutions = CholeskySolutions { lTheta :: SLA.SpMatrix Double
 
 cholmodCholeskySolutions
   :: CholmodFactor
-  -> MixedModel b g 
+  -> MixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVector
   -> IO CholeskySolutions
 cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
   let (cholmodC, cholmodF, _) = cholmodFactor
       (MixedModel             (RegressionModel _ mX vY) levels  ) = mixedModel
-      (RandomEffectCalculated smZ                     mkLambda) = randomEffCalcs
+      (RandomEffectCalculated smZ mkLambda) = randomEffCalcs
       lambda                  = mkLambda vTh
       smZS                    = smZ SLA.## lambda
       smZSt                   = SLA.transpose smZS

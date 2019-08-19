@@ -10,6 +10,7 @@ module Numeric.GLM.Types
   , ItemInfo(..)
   , RowClassifier(..)
   , groupIndices
+  , groupSizes
   , rowInfos
   )
 where
@@ -143,19 +144,22 @@ indexedFixedEffectSet (FixedEffects x) = x
 data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
 {-
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
-The IndexedSet has our map to and from Int
+The IndexedSet has our map to and from Int, i.e., the position in the vectors
 The Vector of Vectors has our membership info where the vector for each row is indexed as in the indexed set
 -}
 data RowClassifier g where
-  RowClassifier :: (A.Ix g, Bounded g, Enum g) => IS.IndexedSet g -> VB.Vector (VB.Vector ItemInfo) -> RowClassifier g
+  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> RowClassifier g
 
 instance Show g => Show (RowClassifier g) where
-  show (RowClassifier sizes infos) = "RowClassifier " ++ show sizes ++ " " ++ show infos
+  show (RowClassifier indices sizes infos) = "RowClassifier " ++ show sizes ++ " " ++ show infos
+
+groupSizes :: RowClassifier g -> M.Map g Int
+groupSizes (RowClassifier _ sizes _) = sizes
 
 groupIndices :: RowClassifier g -> IS.IndexedSet g
-groupIndices (RowClassifier groupIndices _) = groupIndices
+groupIndices (RowClassifier groupIndices _ _) = groupIndices
 
 rowInfos :: RowClassifier g -> VB.Vector (VB.Vector ItemInfo)
-rowInfos (RowClassifier _ infos) = infos
+rowInfos (RowClassifier _ _ infos) = infos
 
 

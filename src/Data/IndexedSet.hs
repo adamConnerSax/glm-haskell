@@ -17,6 +17,8 @@ module Data.IndexedSet
     -- * Access
   , index
   , atIndex
+  -- * Subset
+  , subset
   -- * Map/Traverse
   , mapIS
   , traverseIS

@@ -3,9 +3,11 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE TypeApplications    #-}
 module Main where
 
+import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.Types             as GLM
 import           Numeric.GLM.LinearMixedModel
 import qualified Numeric.SparseDenseConversions
@@ -23,6 +25,7 @@ import qualified Numeric.LinearAlgebra         as LA
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
 import qualified Data.Array                    as A
+import qualified Data.Map                      as M
 import qualified Data.Sparse.Common            as SLA
 import qualified Data.List                     as L
 import qualified Data.Sequence                 as Seq
@@ -61,29 +64,19 @@ main = do
     sleepStudyCSV
     (const True)
   let
+    sleepStudyGroups = IS.fromList [SSG_Subject]
     sleepStudyFixedEffects :: GLM.FixedEffects SleepStudyPredictor
-    sleepStudyFixedEffects    = GLM.allFixedEffects True
-    (vY, mX, rcM) = FL.fold
+    sleepStudyFixedEffects = GLM.allFixedEffects True
+    (vY, mX, rcM)          = FL.fold
       (lmePrepFrame (realToFrac . F.rgetField @Reaction)
-        sleepStudyFixedEffects
-        sleepStudyPredictor
-        sleepStudyGroupLabels)
-      sleepStudyFrame
-{-      
-    (vY, mX, (vRC, numInCat)) = FL.fold
-      (lmePrepFrameOne (realToFrac . F.rgetField @Reaction)
-                       sleepStudyFixedEffects
-                       sleepStudyPredictor
-                       (F.rgetField @Subject)
+                    sleepStudyFixedEffects
+                    sleepStudyGroups
+                    sleepStudyPredictor
+                    sleepStudyGroupLabels
       )
       sleepStudyFrame
-    groupInfo =
-      [ ( numInCat
-        , GLM.makeIndexedEffectSet [GLM.Intercept, GLM.Predictor SleepStudyDays]
-        )
-      ]
--}
-    groupInfo = sleepStudyGroupInfo
+    groupEffectMap = M.fromList
+      [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
     fixedEffects = sleepStudyFixedEffects
 
 {-
@@ -110,10 +103,17 @@ main = do
 --    groupFSs = VB.fromList
 --      [GroupFitSpec numInCat1 True Nothing, GroupFitSpec numInCat2 True Nothing]
   resultEither <- runPIRLS_M $ do
-    rowClassifier  <- throwMaybe "row classifier build failed." rcM
-    let groupInfoList = zip (fmap snd (A.assocs $ GLM.groupSizes rowClassifier)) (fmap snd (A.assocs groupInfo))
-    groupFSs <- throwEither $ fmap (A.listArray (minBound, maxBound)) $ traverse
-      (\(n, ige) -> makeGroupFitSpec n fixedEffects ige)
+    rowClassifier <- throwEither rcM
+    groupInfoList <- throwMaybe "missing group in groupEffectMap" $ do
+      traverse
+          (\(grp, ie) ->
+            M.lookup grp (GLM.groupSizes rowClassifier) >>= return . (grp, , ie)
+          )
+        $ M.toList groupEffectMap
+    groupFSs <- throwEither $ fmap M.fromList $ traverse
+      (\(grp, n, ige) ->
+        makeGroupFitSpec n fixedEffects ige >>= return . (grp, )
+      )
       groupInfoList
     let (n, p) = LA.size mX
         rcRows = VB.length $ GLM.rowInfos rowClassifier
@@ -133,11 +133,11 @@ main = do
       putStrLn "X="
       LA.disp 2 mX
       putStrLn $ "levels=" ++ show groupFSs
-    let smZ              = makeZ mX groupFSs rowClassifier
---        makeST           = makeSTF groupFSs
-        mkLambda         = makeLambda groupFSs
+    smZ <- throwMaybe "Error making Z, the random effect model matrix"
+      $ makeZ mX groupFSs rowClassifier
+    let mkLambda         = makeLambda groupFSs
         (_, q)           = SLA.dim smZ
-        mixedModel       = MixedModel (RegressionModel fixedEffects mX vY) groupFSs
+        mixedModel = MixedModel (RegressionModel fixedEffects mX vY) groupFSs
         randomEffectCalc = RandomEffectCalculated smZ mkLambda
         th0              = setCovarianceVector groupFSs 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
