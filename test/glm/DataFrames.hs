@@ -89,6 +89,8 @@ oatsGroupLabels row group = case group of
   OG_Block        -> F.rgetField @Block row
   OG_VarietyBlock -> F.rgetField @Variety row <> "_" <> F.rgetField @Block row
 
+--
+
 loadToFrame
   :: forall rs
    . (F.ReadRec rs, FI.RecVec rs, V.RMap rs)

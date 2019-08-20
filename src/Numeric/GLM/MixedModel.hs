@@ -86,7 +86,23 @@ makeGroupFitSpec n fixedEffects indexedGroupEffects = do
         else Nothing
   return $ GroupFitSpec n groupIntercept groupSlopes
 
-type GroupFitSpecMap g = M.Map g GroupFitSpec --VB.Vector GroupFitSpec
+type FitSpecByGroup g = M.Map g GroupFitSpec --VB.Vector GroupFitSpec
+
+fitSpecsByGroup
+  :: GroupEffectSets g b -> RowClassifier g -> Either T.Text (FitSpecByGroup g)
+fitSpecsByGroup ges rowClassifier = do
+  let lookupGroupSize (grp, ie) =
+        M.lookup grp (GLM.groupSizes rowClassifier) >>= return . (grp, , ie)
+      makeSpec (grp, n, ige) =
+        makeGroupFitSpec n fixedEffects ige >>= return . (grp, )
+      lookupError =
+        "Failed to find a group in the group effect set ("
+          <> (T.pack $ show ges)
+          <> ") in  the rowClassifier ("
+          <> (T.pack $ show rowClassifier)
+  groupInfoList <-
+    maybe (Left lookupError) Right $ traverse lookupGroupSize $ M.toList ges
+  fmap M.fromList $ traverse makeSpec groupInfoList
 
 data MixedModel b g = MixedModel (RegressionModel b) (GroupFitSpecMap g)
 
@@ -108,19 +124,6 @@ effectsForGroup (GroupFitSpec _ b vbM) =
 colsForGroup :: GroupFitSpec -> Int
 colsForGroup l = nCategories l * effectsForGroup l
 {-# INLINABLE colsForGroup #-}
-
--- classify row into its levels
--- the vector has a category number for each level
--- e.g., rc :: RowClassifier
--- rc (rowNumber :: Int) == [cat1 :: Int, cat2 :: Int]
--- catN :: RowClass
---type RowClassifier g = RowIndex -> A.ArrayVB.Vector Int
-
-categoryNumber :: A.Ix g => GLM.RowClassifier g -> Int -> g -> Maybe Int
-categoryNumber (GLM.RowClassifier groupIndices sizes rowClassifierV) rowIndex group
-  = do
-    vectorIndex <- groupIndices `IS.index` group
-    return $ GLM.itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex
 
 data ParameterEstimates =
   ParameterEstimates
@@ -178,7 +181,7 @@ makeZ mX groupFSM rc = do
     -- construct Z for level as a fold over rows
     entries :: Int -> g -> GroupFitSpec -> Int -> Maybe [(Int, Int, Double)]
     entries colOffset group groupFS rowIndex = do
-      categoryN <- categoryNumber rc rowIndex group
+      categoryN <- GLM.categoryNumber rc rowIndex group
       let
         entryOffset = colOffset + (effectsForGroup groupFS * categoryN)
         (intercept, slopeOffset) = if groupIntercept groupFS

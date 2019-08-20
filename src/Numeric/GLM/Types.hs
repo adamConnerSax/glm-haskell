@@ -86,37 +86,6 @@ instance (Bounded b, Enum b, A.Ix b) => A.Ix (WithIntercept b) where
 
 type IndexedEffectSet b = IS.IndexedSet (WithIntercept b)
 
-{-
-data IndexedEffectSet b where
-  IndexedEffectSet :: M.Map (WithIntercept b) Int -> M.Map Int (WithIntercept b) -> IndexedEffectSet b
-    deriving (Show)
-
-effectSetMembers :: IndexedEffectSet b -> [WithIntercept b]
-effectSetMembers (IndexedEffectSet indexByEffect _) = M.keys indexByEffect
-
-indexedEffectSetFromList :: Ord b => [WithIntercept b] -> IndexedEffectSet b
-indexedEffectSetFromList es =
-  let pairs         = zip [0 ..] $ L.sort es
-      indexByEffect = M.fromList $ fmap (\(a, b) -> (b, a)) pairs
-      effectByIndex = M.fromList pairs
-  in  IndexedEffectSet indexByEffect effectByIndex
-
-makeIndexedEffectSet
-  :: (Ord b, Foldable f) => f (WithIntercept b) -> IndexedEffectSet b
-makeIndexedEffectSet = indexedEffectSetFromList . FL.fold FL.list
-
-addIndexedEffect
-  :: Ord b => IndexedEffectSet b -> WithIntercept b -> IndexedEffectSet b
-addIndexedEffect (IndexedEffectSet m _) x =
-  indexedEffectSetFromList . (x :) . fmap fst $ M.toList m
-
-effectIndex :: Ord b => IndexedEffectSet b -> WithIntercept b -> Maybe Int
-effectIndex (IndexedEffectSet indexByEffect _) x = M.lookup x indexByEffect
-
-effectAtIndex :: Ord b => IndexedEffectSet b -> Int -> Maybe (WithIntercept b)
-effectAtIndex (IndexedEffectSet _ effectByIndex) n = M.lookup n effectByIndex
--}
-
 -- serves as a holder for the intercept Choice and a proxy for the type b
 data FixedEffects b where
   FixedEffects :: IndexedEffectSet b -> FixedEffects b
@@ -140,8 +109,17 @@ indexedFixedEffectSet
 indexedFixedEffectSet InterceptOnly    = IS.fromList [Intercept]
 indexedFixedEffectSet (FixedEffects x) = x
 
+-- we fill this in at the end with the estimates and covariances
+data EffectEstimates b where
+  EffectEstimates :: IndexedEffectSet b -> LA.Vector Double -> LA.Matrix Double -> EffectEstimates b
+
+type GroupEffectSets g b = M.Map g (IndexedEffectSet b)
+
+groupEffectIndex :: GroupEffectSets g b -> g -> (WithIntercept b) -> Maybe Int
+groupEffectIndex ges group effect = M.lookup group ges >>= flip IS.index effect
 
 data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
+
 {-
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
 The IndexedSet has our map to and from Int, i.e., the position in the vectors
@@ -149,6 +127,15 @@ The Vector of Vectors has our membership info where the vector for each row is i
 -}
 data RowClassifier g where
   RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> RowClassifier g
+
+
+
+-- get the row category for a given row and group
+categoryNumber :: Ord g => GLM.RowClassifier g -> Int -> g -> Maybe Int
+categoryNumber (GLM.RowClassifier groupIndices _ rowClassifierV) rowIndex group
+  = do
+    vectorIndex <- groupIndices `IS.index` group
+    return $ GLM.itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex  
 
 instance Show g => Show (RowClassifier g) where
   show (RowClassifier indices sizes infos) = "RowClassifier " ++ show sizes ++ " " ++ show infos
@@ -163,3 +150,8 @@ rowInfos :: RowClassifier g -> VB.Vector (VB.Vector ItemInfo)
 rowInfos (RowClassifier _ _ infos) = infos
 
 
+data EffectParameters g b where
+  EffectParameters :: IndexedEffectSet b -> LA.Matrix Double -> EffectParameters g b
+
+
+type EffectParametersByGroup g b = M.Map g (EffectParameters g b)
