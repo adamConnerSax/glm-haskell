@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Numeric.GLM.Types
@@ -11,7 +12,16 @@ module Numeric.GLM.Types
   , RowClassifier(..)
   , groupIndices
   , groupSizes
+  , groupSize
   , rowInfos
+  , EffectsByGroup
+  , groupEffects
+  , categoryNumberFromRowIndex
+  , categoryNumberFromLabel
+  , EffectStatistics(..)
+  , EffectStatisticsByGroup
+  , EffectParameters(..)
+  , EffectParametersByGroup
   )
 where
 
@@ -23,6 +33,7 @@ import qualified Data.List                     as L
 import qualified Data.Map                      as M
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
+import qualified Numeric.LinearAlgebra         as LA
 
 data WithIntercept b where
   Intercept :: WithIntercept b
@@ -65,10 +76,6 @@ instance Bounded b => Bounded (WithIntercept b) where
   maxBound = Predictor (maxBound :: b)
 
 instance (Bounded b, Enum b, A.Ix b) => A.Ix (WithIntercept b) where
-{-  range (Intercept, Intercept) = [Intercept]
-  range (Intercept, (Predictor x)) = Intercept : fmap Predictor (A.range (minBound, x))
-  range ((Predictor x), (Predictor y)) = fmap Predictor $ A.range (x, y)
-  range (_, _) = [] -}
   range (a,b) = [a..b]
   index (Intercept, _) Intercept = 0
   index (Intercept, Intercept) (Predictor _) = error "Ix{WithIntercept b}.index: Index out of range.  \"index Intercept Intercept (Predictor _)\" called."
@@ -109,14 +116,27 @@ indexedFixedEffectSet
 indexedFixedEffectSet InterceptOnly    = IS.fromList [Intercept]
 indexedFixedEffectSet (FixedEffects x) = x
 
--- we fill this in at the end with the estimates and covariances
-data EffectEstimates b where
-  EffectEstimates :: IndexedEffectSet b -> LA.Vector Double -> LA.Matrix Double -> EffectEstimates b
+type EffectsByGroup g b = M.Map g (IndexedEffectSet b)
 
-type GroupEffectSets g b = M.Map g (IndexedEffectSet b)
+groupEffects
+  :: (Show g, Ord g, Show b)
+  => EffectsByGroup g b
+  -> g
+  -> Either T.Text (IndexedEffectSet b)
+groupEffects ebg group =
+  maybe
+      (  Left
+      $  "Failed to find \""
+      <> (T.pack $ show group)
+      <> " in "
+      <> (T.pack $ show ebg)
+      )
+      Right
+    $ M.lookup group ebg
 
-groupEffectIndex :: GroupEffectSets g b -> g -> (WithIntercept b) -> Maybe Int
-groupEffectIndex ges group effect = M.lookup group ges >>= flip IS.index effect
+groupEffectIndex
+  :: (Ord g, Ord b) => EffectsByGroup g b -> g -> (WithIntercept b) -> Maybe Int
+groupEffectIndex ebg group effect = M.lookup group ebg >>= flip IS.index effect
 
 data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
 
@@ -124,34 +144,63 @@ data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
 The IndexedSet has our map to and from Int, i.e., the position in the vectors
 The Vector of Vectors has our membership info where the vector for each row is indexed as in the indexed set
+Finally, the @Map g (Map Text Int)@ contains the info required to map
+a specific category in a group to its category index  
 -}
 data RowClassifier g where
-  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> RowClassifier g
-
-
+  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> M.Map g (M.Map T.Text Int) -> RowClassifier g
 
 -- get the row category for a given row and group
-categoryNumber :: Ord g => GLM.RowClassifier g -> Int -> g -> Maybe Int
-categoryNumber (GLM.RowClassifier groupIndices _ rowClassifierV) rowIndex group
+categoryNumberFromRowIndex :: Ord g => RowClassifier g -> Int -> g -> Maybe Int
+categoryNumberFromRowIndex (RowClassifier groupIndices _ rowClassifierV _) rowIndex group
   = do
     vectorIndex <- groupIndices `IS.index` group
-    return $ GLM.itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex  
+    return $ itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex  
+
+categoryNumberFromLabel :: Ord g => RowClassifier g -> T.Text -> g -> Maybe Int
+categoryNumberFromLabel (RowClassifier _ _ _ categoryIndexByGroup) label group
+  = M.lookup group categoryIndexByGroup >>= M.lookup label
 
 instance Show g => Show (RowClassifier g) where
-  show (RowClassifier indices sizes infos) = "RowClassifier " ++ show sizes ++ " " ++ show infos
+  show (RowClassifier indices sizes infos labelMaps) = "RowClassifier " ++ show indices ++ " " ++ show sizes ++ " " ++ show infos ++ " " ++ show labelMaps
 
 groupSizes :: RowClassifier g -> M.Map g Int
-groupSizes (RowClassifier _ sizes _) = sizes
+groupSizes (RowClassifier _ sizes _ _) = sizes
+
+groupSize :: (Show g, Ord g) => RowClassifier g -> g -> Either T.Text Int
+groupSize rc group =
+  maybe
+      (  Left
+      $  "Failed to find \""
+      <> (T.pack $ show group)
+      <> " in group sizes map: "
+      <> (T.pack $ show $ groupSizes rc)
+      )
+      Right
+    $ M.lookup group
+    $ groupSizes rc
 
 groupIndices :: RowClassifier g -> IS.IndexedSet g
-groupIndices (RowClassifier groupIndices _ _) = groupIndices
+groupIndices (RowClassifier groupIndices _ _ _) = groupIndices
 
 rowInfos :: RowClassifier g -> VB.Vector (VB.Vector ItemInfo)
-rowInfos (RowClassifier _ _ infos) = infos
+rowInfos (RowClassifier _ _ infos _) = infos
 
+labelMaps :: RowClassifier g -> M.Map g (M.Map T.Text Int)
+labelMaps (RowClassifier _ _ _ labelMaps) = labelMaps
 
-data EffectParameters g b where
-  EffectParameters :: IndexedEffectSet b -> LA.Matrix Double -> EffectParameters g b
+-- types for storing results
+-- we fill this in at the end with the (mean) estimates and covariances
+data EffectStatistics b where
+  EffectStatistics :: IndexedEffectSet b -> LA.Vector Double -> LA.Matrix Double -> EffectStatistics b
+  deriving (Show)
 
+type EffectStatisticsByGroup g b = M.Map g (EffectStatistics b)
 
-type EffectParametersByGroup g b = M.Map g (EffectParameters g b)
+-- One column per effect, estimates for each category. 
+data EffectParameters b where
+  EffectParameters :: IndexedEffectSet b -> LA.Matrix Double -> EffectParameters b
+  deriving (Show)
+
+type EffectParametersByGroup g b = M.Map g (EffectParameters b)
+

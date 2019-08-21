@@ -11,6 +11,7 @@ module Data.IndexedSet
   , fromFoldable
   , add
     -- * Conversion
+  , size
   , toList
   , toSet
   , members
@@ -66,6 +67,9 @@ atIndex (IndexedSet _ byIndex) n = IM.lookup n byIndex
 -- conversion
 members :: IndexedSet a -> [a]
 members = toList
+
+size :: IndexedSet a -> Int
+size (IndexedSet indexBy _) = M.size indexBy
 
 toList :: IndexedSet a -> [a]
 toList (IndexedSet indexBy _) = M.keys indexBy

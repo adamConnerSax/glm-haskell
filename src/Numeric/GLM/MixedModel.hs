@@ -5,6 +5,7 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections       #-}
 module Numeric.GLM.MixedModel where
 
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
@@ -88,23 +89,27 @@ makeGroupFitSpec n fixedEffects indexedGroupEffects = do
 
 type FitSpecByGroup g = M.Map g GroupFitSpec --VB.Vector GroupFitSpec
 
-fitSpecsByGroup
-  :: GroupEffectSets g b -> RowClassifier g -> Either T.Text (FitSpecByGroup g)
-fitSpecsByGroup ges rowClassifier = do
+fitSpecByGroup
+  :: (Ord g, Show g, Ord b, Enum b, Bounded b, Show b)
+  => GLM.FixedEffects b
+  -> GLM.EffectsByGroup g b
+  -> GLM.RowClassifier g
+  -> Either T.Text (FitSpecByGroup g)
+fitSpecByGroup fixedEffects ebg rowClassifier = do
   let lookupGroupSize (grp, ie) =
         M.lookup grp (GLM.groupSizes rowClassifier) >>= return . (grp, , ie)
       makeSpec (grp, n, ige) =
         makeGroupFitSpec n fixedEffects ige >>= return . (grp, )
       lookupError =
         "Failed to find a group in the group effect set ("
-          <> (T.pack $ show ges)
+          <> (T.pack $ show ebg)
           <> ") in  the rowClassifier ("
           <> (T.pack $ show rowClassifier)
   groupInfoList <-
-    maybe (Left lookupError) Right $ traverse lookupGroupSize $ M.toList ges
+    maybe (Left lookupError) Right $ traverse lookupGroupSize $ M.toList ebg
   fmap M.fromList $ traverse makeSpec groupInfoList
 
-data MixedModel b g = MixedModel (RegressionModel b) (GroupFitSpecMap g)
+data MixedModel b g = MixedModel (RegressionModel b) (FitSpecByGroup g)
 
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVector = LA.Vector Double
@@ -138,7 +143,7 @@ type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
 runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
 
-setCovarianceVector :: GroupFitSpecMap g -> Double -> Double -> LA.Vector Double
+setCovarianceVector :: FitSpecByGroup g -> Double -> Double -> LA.Vector Double
 setCovarianceVector groupFSM diag offDiag = FL.fold fld groupFSM
  where
   fld = FL.Fold
@@ -167,7 +172,7 @@ makeZ
   :: forall g
    . (Enum g, Bounded g, A.Ix g)
   => FixedPredictors
-  -> GroupFitSpecMap g
+  -> FitSpecByGroup g
   -> GLM.RowClassifier g
   -> Maybe RandomEffectModelMatrix
 makeZ mX groupFSM rc = do
@@ -181,7 +186,7 @@ makeZ mX groupFSM rc = do
     -- construct Z for level as a fold over rows
     entries :: Int -> g -> GroupFitSpec -> Int -> Maybe [(Int, Int, Double)]
     entries colOffset group groupFS rowIndex = do
-      categoryN <- GLM.categoryNumber rc rowIndex group
+      categoryN <- GLM.categoryNumberFromRowIndex rc rowIndex group
       let
         entryOffset = colOffset + (effectsForGroup groupFS * categoryN)
         (intercept, slopeOffset) = if groupIntercept groupFS
@@ -247,7 +252,7 @@ checkProblem (MixedModel (RegressionModel _ mX vY) _) (RandomEffectCalculated sm
 -- Lambda is built from lower-triangular blocks
 -- which are p_i x p_i.  Theta contains the values
 -- for each block, in col major order
-makeLambda :: GroupFitSpecMap g -> (CovarianceVector -> Lambda)
+makeLambda :: FitSpecByGroup g -> (CovarianceVector -> Lambda)
 makeLambda groupFSM =
   let blockF vTH = FL.Fold
         (\(bs, vx) l' -> ((l', vx) : bs, VS.drop (effectsForGroup l') vx))
@@ -300,6 +305,8 @@ cholmodAnalyzeProblem (RandomEffectCalculated smZ _) = do
 
 data ProfiledDevianceVerbosity = PDVNone | PDVSimple | PDVAll deriving (Show, Eq)
 
+--data SolutionComponents = SolutionComponents { mRX :: LA.Matrix Double, vBeta :: LA.Vector Double, vTheta :: LA.Vector Double, vb :: LA.Vector Double }
+
 profiledDeviance
   :: ProfiledDevianceVerbosity
   -> CholmodFactor
@@ -309,10 +316,12 @@ profiledDeviance
   -> CovarianceVector -- ^ theta
   -> IO
        ( Double
+       , Double
        , LA.Vector Double
        , SLA.SpVector Double
        , SLA.SpVector Double
-       ) -- ^ (pd, beta, u, b) 
+       , CholeskySolutions
+       ) -- ^ (pd, sigma^2, beta, u, b) 
 profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reCalc@(RandomEffectCalculated smZ mkLambda) vTh
   = do
     let n      = LA.size vY
@@ -321,11 +330,8 @@ profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reC
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
         smZSt  = SLA.transpose smZS
-    CholeskySolutions smLth smRzx mRx svBeta svu <- cholmodCholeskySolutions
-      cf
-      mm
-      reCalc
-      vTh
+    cs@(CholeskySolutions smLth smRzx mRx svBeta svu) <-
+      cholmodCholeskySolutions cf mm reCalc vTh
     when (verbosity == PDVAll) $ do
       putStrLn "Z"
       LA.disp 2 $ SD.toDenseMatrix smZ
@@ -341,6 +347,7 @@ profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reC
         vBeta   = SD.toDenseVector svBeta
         vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
+        sigma2  = rTheta2 / realToFrac n
     let logLth        = logDetTriangularSM smLth
         (dof, logDet) = case dt of
           ML   -> (realToFrac n, logLth)
@@ -355,7 +362,7 @@ profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reC
       putStrLn $ "2 * logDet=" ++ show (2 * logDet)
     when (verbosity == PDVAll || verbosity == PDVSimple) $ do
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
-    return (pd, vBeta, svu, svb)
+    return (pd, sigma2, vBeta, svu, svb, cs)
 
 upperTriangular :: Int -> Int -> a -> Bool
 upperTriangular r c _ = (r <= c)

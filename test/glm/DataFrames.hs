@@ -163,6 +163,7 @@ lmePrepFrame observationF fe groupIndices getPredictorF classifierLabelF
         return $ GLM.RowClassifier groupIndices
                                    sizes
                                    (VB.fromList $ FL.fold FL.list indexed)
+                                   indexMaps
       getPredictorF' _   GLM.Intercept     = 1
       getPredictorF' row (GLM.Predictor x) = getPredictorF row x
       predictorF row = LA.fromList $ case fe of

@@ -103,18 +103,9 @@ main = do
       fixedEffects = oatsFixedEffects
 
   resultEither <- runPIRLS_M $ do
-    rowClassifier <- throwEither rcM
-    groupInfoList <- throwMaybe "missing group in groupEffectMap" $ do
-      traverse
-          (\(grp, ie) ->
-            M.lookup grp (GLM.groupSizes rowClassifier) >>= return . (grp, , ie)
-          )
-        $ M.toList groupEffectMap
-    groupFSM <- throwEither $ fmap M.fromList $ traverse
-      (\(grp, n, ige) ->
-        makeGroupFitSpec n fixedEffects ige >>= return . (grp, )
-      )
-      groupInfoList
+    rowClassifier  <- throwEither rcM
+    fitSpecByGroup <- throwEither
+      $ fitSpecByGroup fixedEffects groupEffectMap rowClassifier
     let (n, p) = LA.size mX
         rcRows = VB.length $ GLM.rowInfos rowClassifier
     when verbose $ liftIO $ do
@@ -128,29 +119,27 @@ main = do
       <> " rows in the data!"
     --let rowClassifier n = vRC VB.! n
     when verbose $ liftIO $ do
-      putStrLn $ show $ fmap colsForGroup groupFSM
+      putStrLn $ show $ fmap colsForGroup fitSpecByGroup
       putStrLn $ "y=" ++ show vY
       putStrLn "X="
       LA.disp 2 mX
-      putStrLn $ "levels=" ++ show groupFSM
+      putStrLn $ "levels=" ++ show fitSpecByGroup
     smZ <- throwMaybe "Error making Z, the random effect model matrix"
-      $ makeZ mX groupFSM rowClassifier
-    let mkLambda         = makeLambda groupFSM
-        (_, q)           = SLA.dim smZ
-        mixedModel = MixedModel (RegressionModel fixedEffects mX vY) groupFSM
-        randomEffectCalc = RandomEffectCalculated smZ mkLambda
-        th0              = setCovarianceVector groupFSM 1 0 -- LA.fromList [2, 2]
+      $ makeZ mX fitSpecByGroup rowClassifier
+    let
+      mkLambda = makeLambda fitSpecByGroup
+      (_, q)   = SLA.dim smZ
+      mixedModel =
+        MixedModel (RegressionModel fixedEffects mX vY) fitSpecByGroup
+      randomEffectCalc = RandomEffectCalculated smZ mkLambda
+      th0              = setCovarianceVector fitSpecByGroup 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem mixedModel randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
-    (th2_ML, pd2_ML, vBeta2_ML, vu2_ML, vb2_ML) <- minimizeDeviance
-      mdVerbosity
-      ML
-      mixedModel
-      randomEffectCalc
-      th0
+    (th2_ML, pd2_ML, sigma2_ML, vBeta2_ML, vu2_ML, vb2_ML, cs_ML) <-
+      minimizeDeviance mdVerbosity ML mixedModel randomEffectCalc th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
@@ -159,18 +148,14 @@ main = do
       putStrLn $ "b=" ++ show vb2_ML
     report p
            q
-           groupFSM
+           fitSpecByGroup
            vY
            mX
            smZ
            (SD.toSparseVector vBeta2_ML)
            (SD.toSparseVector vb2_ML)
-    (th2_REML, pd2_REML, vBeta2_REML, vu2_REML, vb2_REML) <- minimizeDeviance
-      mdVerbosity
-      REML
-      mixedModel
-      randomEffectCalc
-      th0
+    (th2_REML, pd2_REML, sigma2_REML, vBeta2_REML, vu2_REML, vb2_REML, cs_REML) <-
+      minimizeDeviance mdVerbosity REML mixedModel randomEffectCalc th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
@@ -179,21 +164,26 @@ main = do
       putStrLn $ "b=" ++ show vb2_REML
     report p
            q
-           groupFSM
+           fitSpecByGroup
            vY
            mX
            smZ
            (SD.toSparseVector vBeta2_REML)
            (SD.toSparseVector vb2_REML)
+    let fes_REML = fixedEffectStatistics fixedEffects sigma2_REML cs_REML
+    liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
+    epg <- throwEither
+      $ effectParametersByGroup rowClassifier groupEffectMap vb2_REML
+    liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
     when verbose $ do
-      cholmodFactor                    <- cholmodAnalyzeProblem randomEffectCalc
-      (pdTest, betaTest, uTest, bTest) <- liftIO $ profiledDeviance
-        PDVAll
-        cholmodFactor
-        REML
-        mixedModel
-        randomEffectCalc
-        th2_REML
+      cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
+      (pdTest, sigma2Test, betaTest, uTest, bTest, _) <-
+        liftIO $ profiledDeviance PDVAll
+                                  cholmodFactor
+                                  REML
+                                  mixedModel
+                                  randomEffectCalc
+                                  th2_REML
       liftIO $ do
         putStrLn $ "pdTest=" ++ show pdTest
         putStrLn $ "betaTest=" ++ show betaTest

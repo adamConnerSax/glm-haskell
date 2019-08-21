@@ -36,6 +36,7 @@ dependencies:
 - statistics >= 0.15.0 && < 0.16
 - text >= 1.1.0.1 && < 1.3
 - vector >= 0.11.0.0 && < 0.13
+- vector-split >= 1.0.0 && < 1.1
 
 flags:
   dump-core:

@@ -11,6 +11,7 @@ module Numeric.GLM.LinearMixedModel
   )
 where
 
+import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.Types             as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.SparseDenseConversions
@@ -26,6 +27,7 @@ import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 import qualified Data.Array                    as A
+import qualified Data.Map                      as M
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 --import qualified Data.Sparse.SpVector          as SLA
@@ -49,6 +51,7 @@ import qualified Data.List                     as L
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
+import qualified Data.Vector.Split             as VS
 
 
 {-
@@ -63,30 +66,34 @@ Z is n x q
 zTz is q x q, this is the part that will be sparse.
 -}
 
-
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
-thetaLowerBounds :: GroupFitSpecMap g -> NL.Bounds
+thetaLowerBounds :: FitSpecByGroup g -> NL.Bounds
 thetaLowerBounds groupFSM =
   let negInfinity :: Double = negate $ 1 / 0
   in  NL.LowerBounds $ setCovarianceVector groupFSM 0 negInfinity --FL.fold fld levels
 
 data MinimizeDevianceVerbosity = MDVNone | MDVSimple
 
+data SolutionComponents = SolutionComponents { mRX :: LA.Matrix Double, vBeta :: LA.Vector Double, vTheta :: LA.Vector Double, vb :: LA.Vector Double }
+
+-- b is an Enumeration of Effects/Predictors and g is an enumeration of groups
 minimizeDeviance
   :: SemC r
   => MinimizeDevianceVerbosity
   -> DevianceType
-  -> MixedModel g i
+  -> MixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVector -- ^ initial guess for theta
   -> P.Sem
        r
        ( LA.Vector Double
        , Double
+       , Double
        , LA.Vector Double
        , LA.Vector Double
        , LA.Vector Double
-       ) -- ^ (theta, profiled_deviance, beta, u, b)
+       , CholeskySolutions
+       ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
 minimizeDeviance verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0
   = do
     cholmodAnalysis <- cholmodAnalyzeProblem reCalc
@@ -95,7 +102,7 @@ minimizeDeviance verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEff
         MDVNone   -> PDVNone
         MDVSimple -> PDVSimple
       pd x = profiledDeviance pdv cholmodAnalysis dt mixedModel reCalc x
-      obj x = unsafePerformIO $ fmap (\(d, _, _, _) -> d) $ pd x
+      obj x = unsafePerformIO $ fmap (\(d, _, _, _, _, _) -> d) $ pd x
       stop           = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
       thetaLB        = thetaLowerBounds levels
       algorithm      = NL.BOBYQA obj [thetaLB] Nothing
@@ -122,15 +129,60 @@ minimizeDeviance verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEff
           ++ show result
           ++ ") reached! At th="
           ++ show thS
-        (pd, vBeta, svu, svb) <- pd thS
-        return (thS, pd, vBeta, SD.toDenseVector svu, SD.toDenseVector svb)
+        (pd, sigma2, vBeta, svu, svb, cs) <- pd thS
+        return
+          ( thS
+          , pd
+          , sigma2
+          , vBeta
+          , SD.toDenseVector svu
+          , SD.toDenseVector svb
+          , cs
+          )
+
+fixedEffectStatistics
+  :: (Ord b, Enum b, Bounded b)
+  => GLM.FixedEffects b
+  -> Double
+  -> CholeskySolutions
+  -> GLM.EffectStatistics b
+fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX svBeta _) =
+  let means = SD.toDenseVector svBeta
+      covs  = LA.scale sigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
+  in  GLM.EffectStatistics (GLM.indexedFixedEffectSet fe) means covs
+
+effectParametersByGroup
+  :: (Ord g, Show g, Show b)
+  => GLM.RowClassifier g
+  -> GLM.EffectsByGroup g b
+  -> LA.Vector Double
+  -> Either T.Text (GLM.EffectParametersByGroup g b)
+effectParametersByGroup rc ebg vb = do
+  let groups = IS.members $ GLM.groupIndices rc
+      groupOffset group = do
+        size     <- GLM.groupSize rc group
+        nEffects <- IS.size <$> GLM.groupEffects ebg group
+        return $ size * nEffects
+  offsets <- FL.prescan FL.sum <$> traverse groupOffset groups
+  let
+    ep (group, offset) = do
+      size    <- GLM.groupSize rc group
+      effects <- GLM.groupEffects ebg group
+      let nEffects = IS.size effects
+          parameterMatrix =
+            LA.fromColumns
+              $ VS.chunksOf size
+              $ VS.take (size * nEffects)
+              $ VS.drop offset vb
+      return (group, GLM.EffectParameters effects parameterMatrix)
+  fmap M.fromList $ traverse ep $ zip groups offsets
 
 
 report
   :: (LA.Container LA.Vector Double, SemC r)
   => Int -- ^ p
   -> Int -- ^ q
-  -> GroupFitSpecMap g
+  -> FitSpecByGroup g
   -> LA.Vector Double -- ^ y
   -> LA.Matrix Double -- ^ X
   -> SLA.SpMatrix Double -- ^ Z
