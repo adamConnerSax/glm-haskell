@@ -14,14 +14,17 @@ module Numeric.GLM.Types
   , groupSizes
   , groupSize
   , rowInfos
+  , labelIndex
   , EffectsByGroup
   , groupEffects
   , categoryNumberFromRowIndex
   , categoryNumberFromLabel
-  , EffectStatistics(..)
-  , EffectStatisticsByGroup
+  , FixedEffectStatistics(..)
+  , GroupEffectCovariances(..)
+  , EffectCovariancesByGroup
   , EffectParameters(..)
   , EffectParametersByGroup
+  , effectParameters
   )
 where
 
@@ -93,6 +96,14 @@ instance (Bounded b, Enum b, A.Ix b) => A.Ix (WithIntercept b) where
 
 type IndexedEffectSet b = IS.IndexedSet (WithIntercept b)
 
+eitherLookup :: (Show k, Ord k, Show x) => k -> M.Map k x -> Either T.Text x
+eitherLookup k m =
+  maybe
+      (Left $ "\"" <> (T.pack $ show k) <> " not found in " <> (T.pack $ show m)
+      )
+      Right
+    $ M.lookup k m
+
 -- serves as a holder for the intercept Choice and a proxy for the type b
 data FixedEffects b where
   FixedEffects :: IndexedEffectSet b -> FixedEffects b
@@ -123,16 +134,7 @@ groupEffects
   => EffectsByGroup g b
   -> g
   -> Either T.Text (IndexedEffectSet b)
-groupEffects ebg group =
-  maybe
-      (  Left
-      $  "Failed to find \""
-      <> (T.pack $ show group)
-      <> " in "
-      <> (T.pack $ show ebg)
-      )
-      Right
-    $ M.lookup group ebg
+groupEffects ebg group = eitherLookup group ebg
 
 groupEffectIndex
   :: (Ord g, Ord b) => EffectsByGroup g b -> g -> (WithIntercept b) -> Maybe Int
@@ -168,17 +170,7 @@ groupSizes :: RowClassifier g -> M.Map g Int
 groupSizes (RowClassifier _ sizes _ _) = sizes
 
 groupSize :: (Show g, Ord g) => RowClassifier g -> g -> Either T.Text Int
-groupSize rc group =
-  maybe
-      (  Left
-      $  "Failed to find \""
-      <> (T.pack $ show group)
-      <> " in group sizes map: "
-      <> (T.pack $ show $ groupSizes rc)
-      )
-      Right
-    $ M.lookup group
-    $ groupSizes rc
+groupSize rc group = eitherLookup group (groupSizes rc)
 
 groupIndices :: RowClassifier g -> IS.IndexedSet g
 groupIndices (RowClassifier groupIndices _ _ _) = groupIndices
@@ -189,13 +181,23 @@ rowInfos (RowClassifier _ _ infos _) = infos
 labelMaps :: RowClassifier g -> M.Map g (M.Map T.Text Int)
 labelMaps (RowClassifier _ _ _ labelMaps) = labelMaps
 
+labelIndex
+  :: (Show g, Ord g) => RowClassifier g -> g -> T.Text -> Either T.Text Int
+labelIndex rc group label = do
+  labelMap <- eitherLookup group (labelMaps rc)
+  eitherLookup label labelMap
+
 -- types for storing results
 -- we fill this in at the end with the (mean) estimates and covariances
-data EffectStatistics b where
-  EffectStatistics :: IndexedEffectSet b -> LA.Vector Double -> LA.Matrix Double -> EffectStatistics b
+data FixedEffectStatistics b where
+  FixedEffectStatistics :: FixedEffects b -> LA.Vector Double -> LA.Matrix Double -> FixedEffectStatistics b
   deriving (Show)
 
-type EffectStatisticsByGroup g b = M.Map g (EffectStatistics b)
+data GroupEffectCovariances b where
+  GroupEffectCovariances :: IndexedEffectSet b -> LA.Matrix Double -> GroupEffectCovariances b
+  deriving (Show)
+
+type EffectCovariancesByGroup g b = M.Map g (GroupEffectCovariances b)
 
 -- One column per effect, estimates for each category. 
 data EffectParameters b where
@@ -203,4 +205,10 @@ data EffectParameters b where
   deriving (Show)
 
 type EffectParametersByGroup g b = M.Map g (EffectParameters b)
+effectParameters
+  :: (Show g, Ord g, Show b)
+  => g
+  -> EffectParametersByGroup g b
+  -> Either T.Text (EffectParameters b)
+effectParameters = eitherLookup
 

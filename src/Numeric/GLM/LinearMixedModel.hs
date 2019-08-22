@@ -28,6 +28,7 @@ import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 import qualified Data.Array                    as A
 import qualified Data.Map                      as M
+import           Data.Maybe                     ( catMaybes )
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 --import qualified Data.Sparse.SpVector          as SLA
@@ -145,11 +146,11 @@ fixedEffectStatistics
   => GLM.FixedEffects b
   -> Double
   -> CholeskySolutions
-  -> GLM.EffectStatistics b
+  -> GLM.FixedEffectStatistics b
 fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX svBeta _) =
   let means = SD.toDenseVector svBeta
       covs  = LA.scale sigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
-  in  GLM.EffectStatistics (GLM.indexedFixedEffectSet fe) means covs
+  in  GLM.FixedEffectStatistics fe means covs
 
 effectParametersByGroup
   :: (Ord g, Show g, Show b)
@@ -176,6 +177,35 @@ effectParametersByGroup rc ebg vb = do
               $ VS.drop offset vb
       return (group, GLM.EffectParameters effects parameterMatrix)
   fmap M.fromList $ traverse ep $ zip groups offsets
+
+
+effectCovariancesByGroup
+  :: (Ord g, Show g, Enum b, Bounded b, Show b)
+  => GLM.EffectsByGroup g b
+  -> Double
+  -> LA.Vector Double
+  -> Either T.Text (GLM.EffectCovariancesByGroup g b)
+effectCovariancesByGroup ebg sigma2 vTh = do
+  let
+    groups = M.keys ebg
+    nElements n = n * (n + 1) `div` 2
+    groupOffset group = nElements . IS.size <$> GLM.groupEffects ebg group
+    ltIndices n = [ (r, c) | c <- [0 .. (n - 1)], r <- [c .. (n - 1)] ]
+    ltAssocs n v = zip (ltIndices n) (VS.toList v)
+    tF ((r, c), x) = if r > c then Just ((c, r), x) else Nothing
+    tAssocs l = catMaybes $ fmap tF l
+    makeLT n v = let l = ltAssocs n v in LA.assoc (n, n) 0 $ l ++ (tAssocs l)
+  offsets <- FL.prescan FL.sum <$> traverse groupOffset groups
+  let ecs (group, offset) = do
+        effects <- GLM.groupEffects ebg group
+        let nEffects = IS.size effects
+            cm =
+              LA.scale sigma2
+                $ makeLT nEffects
+                $ VS.take (nElements nEffects)
+                $ VS.drop offset vTh
+        return (group, GLM.GroupEffectCovariances effects cm)
+  fmap M.fromList $ traverse ecs $ zip groups offsets
 
 
 report

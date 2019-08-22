@@ -347,12 +347,12 @@ profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reC
         vBeta   = SD.toDenseVector svBeta
         vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
-        sigma2  = rTheta2 / realToFrac n
     let logLth        = logDetTriangularSM smLth
         (dof, logDet) = case dt of
           ML   -> (realToFrac n, logLth)
           REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRx))
-        pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+        pd     = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+        sigma2 = rTheta2 / dof
     when (verbosity == PDVAll) $ do
       let (_, _, smP) = cf
       putStrLn $ "smP="
@@ -431,4 +431,32 @@ cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
   smLth <- CH.choleskyFactorSM cholmodF cholmodC
   return $ CholeskySolutions smLth smRzx mRx svBeta svu
 
-
+-- fitted values of input data
+fitted
+  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b)
+  => (r -> b -> Double)
+  -> (r -> g -> T.Text)
+  -> GLM.FixedEffectStatistics b
+  -> GLM.EffectParametersByGroup g b
+  -> GLM.RowClassifier g
+  -> r
+  -> Either T.Text Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
+fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
+  = do
+    let applyEffect b e r = case b of
+          GLM.Intercept   -> e
+          GLM.Predictor b -> e * getPred r b
+        applyEffects ies v r =
+          FL.fold FL.sum
+            $ fmap
+                (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) r
+                )
+            $ IS.toIndexedList ies
+        groups = M.keys ebg
+        applyGroupEffects r group = do
+          labelIndex <- GLM.labelIndex rowClassifier group (getLabel r group)
+          (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
+          return $ applyEffects ies (head $ drop labelIndex $ LA.toRows mEP) r
+        fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
+    groupEffects <- traverse (applyGroupEffects row) $ M.keys ebg
+    return $ fixedEffects + FL.fold FL.sum groupEffects

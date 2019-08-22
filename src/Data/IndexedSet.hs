@@ -13,6 +13,7 @@ module Data.IndexedSet
     -- * Conversion
   , size
   , toList
+  , toIndexedList
   , toSet
   , members
     -- * Access
@@ -73,6 +74,9 @@ size (IndexedSet indexBy _) = M.size indexBy
 
 toList :: IndexedSet a -> [a]
 toList (IndexedSet indexBy _) = M.keys indexBy
+
+toIndexedList :: IndexedSet a -> [(Int, a)]
+toIndexedList (IndexedSet _ im) = IM.toList im
 
 toSet :: Ord a => IndexedSet a -> S.Set a
 toSet = S.fromList . toList

@@ -82,30 +82,30 @@ main = do
     fixedEffects = sleepStudyFixedEffects
 -}
 
-  oatsFrame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield]
-    oatsCSV
-    (const True)
-  let oatsFixedEffects :: GLM.FixedEffects OatsPredictor
-      oatsFixedEffects = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
-      oatsGroups       = IS.fromList [OG_Block, OG_VarietyBlock]
-      (vY, mX, rcM)    = FL.fold
-        (lmePrepFrame (realToFrac . F.rgetField @Yield)
-                      oatsFixedEffects
-                      oatsGroups
-                      getOatsPredictor
-                      oatsGroupLabels
-        )
-        oatsFrame
-      groupEffectMap = M.fromList
+  frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
+                                                               (const True)
+  let getObservation = realToFrac . F.rgetField @Yield
+      fixedEffects :: GLM.FixedEffects OatsPredictor
+      fixedEffects   = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
+      groups         = IS.fromList [OG_Block, OG_VarietyBlock]
+      getPredictor   = getOatsPredictor
+      groupLabels    = oatsGroupLabels
+      effectsByGroup = M.fromList
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
-      fixedEffects = oatsFixedEffects
-
   resultEither <- runPIRLS_M $ do
+    let (vY, mX, rcM) = FL.fold
+          (lmePrepFrame getObservation
+                        fixedEffects
+                        groups
+                        getPredictor
+                        groupLabels
+          )
+          frame
     rowClassifier  <- throwEither rcM
     fitSpecByGroup <- throwEither
-      $ fitSpecByGroup fixedEffects groupEffectMap rowClassifier
+      $ fitSpecByGroup fixedEffects effectsByGroup rowClassifier
     let (n, p) = LA.size mX
         rcRows = VB.length $ GLM.rowInfos rowClassifier
     when verbose $ liftIO $ do
@@ -159,6 +159,7 @@ main = do
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
+      putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
       putStrLn $ "beta=" ++ show vBeta2_REML
       putStrLn $ "u=" ++ show vu2_REML
       putStrLn $ "b=" ++ show vb2_REML
@@ -173,8 +174,17 @@ main = do
     let fes_REML = fixedEffectStatistics fixedEffects sigma2_REML cs_REML
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
     epg <- throwEither
-      $ effectParametersByGroup rowClassifier groupEffectMap vb2_REML
+      $ effectParametersByGroup rowClassifier effectsByGroup vb2_REML
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
+    gec <- throwEither
+      $ effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
+    liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
+    let f r = do
+          let obs = getObservation r
+          fitted <- fitted getPredictor groupLabels fes_REML epg rowClassifier r
+          return (obs, fitted)
+    fitted <- throwEither $ traverse f (FL.fold FL.list frame)
+    liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
     when verbose $ do
       cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
       (pdTest, sigma2Test, betaTest, uTest, bTest, _) <-
