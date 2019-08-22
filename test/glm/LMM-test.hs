@@ -46,42 +46,30 @@ throwMaybe msg x = throwEither $ maybe (Left msg) Right x
 main :: IO ()
 main = do
 {-
-  railFrame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
-  let railFixedEffects :: GLM.FixedEffects ()
-      railFixedEffects = GLM.InterceptOnly
-      railGroups       = IS.fromList [RG_Rail]
-      (vY, mX, rcM)    = FL.fold
-        (lmePrepFrame (realToFrac . F.rgetField @Travel)
-                      railFixedEffects
-                      railGroups
-                      railPredictor
-                      railGroupLabels
-        )
-        railFrame
-      groupEffectMap = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
-      fixedEffects   = railFixedEffects
--}
-{-
-  sleepStudyFrame <- defaultLoadToFrame @'[Reaction, Days, Subject]
-    sleepStudyCSV
-    (const True)
-  let
-    sleepStudyFixedEffects :: GLM.FixedEffects SleepStudyPredictor
-    sleepStudyFixedEffects = GLM.allFixedEffects True
-    sleepStudyGroups = IS.fromList [SSG_Subject]
-    (vY, mX, rcM)          = FL.fold
-      (lmePrepFrame (realToFrac . F.rgetField @Reaction)
-                    sleepStudyFixedEffects
-                    sleepStudyGroups
-                    sleepStudyPredictor
-                    sleepStudyGroupLabels
-      )
-      sleepStudyFrame
-    groupEffectMap = M.fromList
-      [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
-    fixedEffects = sleepStudyFixedEffects
+  frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
+  let getObservation = realToFrac . F.rgetField @Travel
+      fixedEffects :: GLM.FixedEffects ()
+      fixedEffects   = GLM.InterceptOnly
+      groups         = IS.fromList [RG_Rail]
+      getPredictor   = railPredictor
+      groupLabels    = railGroupLabels
+      effectsByGroup = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
 -}
 
+
+  frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
+                                                          (const True)
+  let
+    getObservation = realToFrac . F.rgetField @Reaction
+    fixedEffects :: GLM.FixedEffects SleepStudyPredictor
+    fixedEffects   = GLM.allFixedEffects True
+    groups         = IS.fromList [SSG_Subject]
+    getPredictor   = sleepStudyPredictor
+    groupLabels    = sleepStudyGroupLabels
+    effectsByGroup = M.fromList
+      [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
+
+{-
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
                                                                (const True)
   let getObservation = realToFrac . F.rgetField @Yield
@@ -94,6 +82,7 @@ main = do
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
+-}
   resultEither <- runPIRLS_M $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
