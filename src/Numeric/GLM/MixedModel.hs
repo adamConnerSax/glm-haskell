@@ -24,6 +24,7 @@ import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 import qualified Data.Array                    as A
+import qualified Data.List                     as L
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
@@ -456,7 +457,22 @@ fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier r
         applyGroupEffects r group = do
           labelIndex <- GLM.labelIndex rowClassifier group (getLabel r group)
           (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
-          return $ applyEffects ies (head $ drop labelIndex $ LA.toRows mEP) r
+          return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) r
         fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
     groupEffects <- traverse (applyGroupEffects row) $ M.keys ebg
     return $ fixedEffects + FL.fold FL.sum groupEffects
+
+randomEffectsByLabel
+  :: (Ord g, Show g, Show b, Enum b, Bounded b)
+  => GLM.EffectParametersByGroup g b
+  -> GLM.RowClassifier g
+  -> Either
+       T.Text
+       (M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)]))
+randomEffectsByLabel ebg rowClassifier = do
+  let byLabel group (GLM.EffectParameters ies mEP) = do
+        indexedLabels <- M.toList <$> GLM.labelMap rowClassifier group
+        return
+          $ (ies, fmap (\(l, r) -> (l, LA.toRows mEP L.!! r)) indexedLabels)
+  M.traverseWithKey byLabel ebg
+

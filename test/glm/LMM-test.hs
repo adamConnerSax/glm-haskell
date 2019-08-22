@@ -168,6 +168,8 @@ main = do
     gec <- throwEither
       $ effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
     liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
+    rebl <- throwEither $ randomEffectsByLabel epg rowClassifier
+    liftIO $ putStrLn $ "Random Effects: " ++ show rebl
     let f r = do
           let obs = getObservation r
           fitted <- fitted getPredictor groupLabels fes_REML epg rowClassifier r

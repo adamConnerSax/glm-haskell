@@ -171,8 +171,8 @@ effectParametersByGroup rc ebg vb = do
       effects <- GLM.groupEffects ebg group
       let nEffects = IS.size effects
           parameterMatrix =
-            LA.fromColumns
-              $ VS.chunksOf size
+            LA.fromRows
+              $ VS.chunksOf nEffects
               $ VS.take (size * nEffects)
               $ VS.drop offset vb
       return (group, GLM.EffectParameters effects parameterMatrix)

@@ -14,6 +14,7 @@ module Numeric.GLM.Types
   , groupSizes
   , groupSize
   , rowInfos
+  , labelMap
   , labelIndex
   , EffectsByGroup
   , groupEffects
@@ -181,6 +182,10 @@ rowInfos (RowClassifier _ _ infos _) = infos
 labelMaps :: RowClassifier g -> M.Map g (M.Map T.Text Int)
 labelMaps (RowClassifier _ _ _ labelMaps) = labelMaps
 
+labelMap
+  :: (Show g, Ord g) => RowClassifier g -> g -> Either T.Text (M.Map T.Text Int)
+labelMap rc group = eitherLookup group $ labelMaps rc
+
 labelIndex
   :: (Show g, Ord g) => RowClassifier g -> g -> T.Text -> Either T.Text Int
 labelIndex rc group label = do
@@ -205,6 +210,7 @@ data EffectParameters b where
   deriving (Show)
 
 type EffectParametersByGroup g b = M.Map g (EffectParameters b)
+
 effectParameters
   :: (Show g, Ord g, Show b)
   => g
