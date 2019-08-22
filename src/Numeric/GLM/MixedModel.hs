@@ -23,6 +23,8 @@ import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
+import qualified Colonnade                     as C
+
 import qualified Data.Array                    as A
 import qualified Data.List                     as L
 import qualified Data.Sparse.SpMatrix          as SLA
@@ -433,6 +435,7 @@ cholmodCholeskySolutions cholmodFactor mixedModel randomEffCalcs vTh = do
   return $ CholeskySolutions smLth smRzx mRx svBeta svu
 
 -- fitted values of input data
+-- like "fitted" in lme4
 fitted
   :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b)
   => (r -> b -> Double)
@@ -462,6 +465,8 @@ fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier r
     groupEffects <- traverse (applyGroupEffects row) $ M.keys ebg
     return $ fixedEffects + FL.fold FL.sum groupEffects
 
+
+-- Like "ranef" in lme4
 randomEffectsByLabel
   :: (Ord g, Show g, Show b, Enum b, Bounded b)
   => GLM.EffectParametersByGroup g b
@@ -476,3 +481,7 @@ randomEffectsByLabel ebg rowClassifier = do
           $ (ies, fmap (\(l, r) -> (l, LA.toRows mEP L.!! r)) indexedLabels)
   M.traverseWithKey byLabel ebg
 
+{-
+colRandomEffectsByLabel :: Show b => IndexedEffectSet b -> C.Colonnade Headed (T.Text, LA.Vector Double)
+colRandomEffectsByLabel ies =
+-}
