@@ -33,6 +33,7 @@ dependencies:
 - polysemy >= 0.7.0 && < 0.8
 - polysemy-zoo >= 0.3.0 && < 0.5
 - polysemy-plugin >= 0.2.2 && < 0.3
+- profunctors >= 5.3 && < 5.5
 - sparse-linear-algebra >= 0.3 && < 0.4
 - statistics >= 0.15.0 && < 0.16
 - text >= 1.1.0.1 && < 1.3

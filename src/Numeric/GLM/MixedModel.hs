@@ -27,6 +27,7 @@ import qualified Colonnade                     as C
 
 import qualified Data.Array                    as A
 import qualified Data.List                     as L
+import qualified Data.Profunctor               as P
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
@@ -481,7 +482,30 @@ randomEffectsByLabel ebg rowClassifier = do
           $ (ies, fmap (\(l, r) -> (l, LA.toRows mEP L.!! r)) indexedLabels)
   M.traverseWithKey byLabel ebg
 
-{-
-colRandomEffectsByLabel :: Show b => IndexedEffectSet b -> C.Colonnade Headed (T.Text, LA.Vector Double)
+
+colRandomEffectsByLabel
+  :: Show b
+  => GLM.IndexedEffectSet b
+  -> C.Colonnade C.Headed (T.Text, LA.Vector Double) T.Text
 colRandomEffectsByLabel ies =
--}
+  let
+    indexedEffects = IS.toIndexedList ies
+    colLabel       = C.headed "Category" fst
+    colEffect (index, effect) = C.headed
+      (T.pack $ show effect)
+      (T.pack . show . flip LA.atIndex index . snd)
+  in
+    mconcat $ (colLabel : fmap colEffect indexedEffects)
+
+
+printRandomEffectsByLabel
+  :: (Show g, Show b)
+  => M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)])
+  -> T.Text
+printRandomEffectsByLabel rebg =
+  let printOne (g, (ies, x)) =
+        (T.pack $ show g)
+          <> ":\n"
+          <> (T.pack $ C.ascii (fmap T.unpack $ colRandomEffectsByLabel ies) x)
+          <> "\n"
+  in  mconcat $ fmap printOne $ M.toList rebg

@@ -55,7 +55,7 @@ main = do
       groupLabels    = railGroupLabels
       effectsByGroup = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
 -}
-{-
+
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
   let
@@ -67,10 +67,9 @@ main = do
     groupLabels    = sleepStudyGroupLabels
     effectsByGroup = M.fromList
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
--}
 
-  frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
-                                                               (const True)
+{-
+  frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV                                                               (const True)
   let getObservation = realToFrac . F.rgetField @Yield
       fixedEffects :: GLM.FixedEffects OatsPredictor
       fixedEffects   = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
@@ -81,7 +80,7 @@ main = do
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
-
+-}
   resultEither <- runPIRLS_M $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
@@ -168,7 +167,10 @@ main = do
       $ effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
     liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
     rebl <- throwEither $ randomEffectsByLabel epg rowClassifier
-    liftIO $ putStrLn $ "Random Effects: " ++ show rebl
+    liftIO
+      $  putStrLn
+      $  "Random Effects:\n"
+      ++ (T.unpack $ printRandomEffectsByLabel rebl)
     let f r = do
           let obs = getObservation r
           fitted <- fitted getPredictor groupLabels fes_REML epg rowClassifier r
