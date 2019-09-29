@@ -16,23 +16,23 @@ import qualified Numeric.GLM.Types             as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.SparseDenseConversions
                                                as SD
-import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
-                                               as CH
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
-import qualified GLM.Internal.Log              as Log
+--import qualified GLM.Internal.Log              as Log
 import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
-import qualified Data.Array                    as A
+
 import qualified Data.Map                      as M
 import           Data.Maybe                     ( catMaybes )
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
---import qualified Data.Sparse.SpVector          as SLA
+
 import qualified Numeric.LinearAlgebra.Class   as SLA
+{-
+import qualified Data.Sparse.SpVector          as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
 import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (#^#)
@@ -41,16 +41,14 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (-=-)
                                                 , (-||-)
                                                 )
+-}
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Numeric.NLOPT                 as NL
 
+
 import           System.IO.Unsafe               ( unsafePerformIO )
 
---import           Data.Either                    ( partitionEithers )
-import qualified Data.List                     as L
---import qualified Data.Sequence                 as Seq
 import qualified Data.Text                     as T
-import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 import qualified Data.Vector.Split             as VS
 

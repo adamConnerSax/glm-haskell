@@ -18,7 +18,7 @@ import qualified Data.IndexedSet               as IS
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 
-import qualified GLM.Internal.Log              as Log
+--import qualified GLM.Internal.Log              as Log
 import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
@@ -27,10 +27,11 @@ import qualified Colonnade                     as C
 
 import qualified Data.Array                    as A
 import qualified Data.List                     as L
-import qualified Data.Profunctor               as P
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
+
+{-
 import qualified Numeric.LinearAlgebra.Class   as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
 import           Numeric.LinearAlgebra.Sparse   ( (##)
@@ -40,17 +41,15 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (-=-)
                                                 , (-||-)
                                                 )
-
+-}
 
 import qualified Numeric.LinearAlgebra         as LA
 --import qualified Numeric.NLOPT                 as NL
 
 
 
-import qualified Data.List                     as L
 import qualified Data.Map                      as M
 import           Data.Maybe                     ( isJust )
-import qualified Data.Sequence                 as Seq
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
@@ -234,9 +233,9 @@ makeZ mX groupFSM rc = do
 checkProblem :: SemC r => MixedModel b g -> RandomEffectCalculated -> P.Sem r ()
 checkProblem (MixedModel (RegressionModel _ mX vY) _) (RandomEffectCalculated smZ _)
   = do
-    let (n, p)     = LA.size mX
+    let (n, _)     = LA.size mX
         yRows      = LA.size vY
-        (zRows, q) = SLA.dim smZ
+        (zRows, _) = SLA.dim smZ
     when (zRows /= n)
       $  P.throw @T.Text
       $  (T.pack $ show n)
