@@ -68,9 +68,9 @@ linkFunction LogisticLink = LinkFunction (\x -> log $ x / (1 - x))
 
 linkFunction PoissonLink = LinkFunction log exp exp
 
-type WMatrix = LA.Vector Double -- constant weights
-type UMatrix = SLA.SpMatrix Double
-type VMatrix = LA.Matrix Double
+--type WMatrix = LA.Vector Double -- constant weights
+--type UMatrix = SLA.SpMatrix Double
+--type VMatrix = LA.Matrix Double
 
 
 spUV

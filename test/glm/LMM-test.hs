@@ -45,7 +45,7 @@ throwMaybe msg x = throwEither $ maybe (Left msg) Right x
 
 main :: IO ()
 main = do
-{-
+
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel
       fixedEffects :: GLM.FixedEffects ()
@@ -54,8 +54,8 @@ main = do
       getPredictor   = railPredictor
       groupLabels    = railGroupLabels
       effectsByGroup = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
--}
 
+{-
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
   let
@@ -67,7 +67,7 @@ main = do
     groupLabels    = sleepStudyGroupLabels
     effectsByGroup = M.fromList
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
-
+-}
 {-
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV                                                               (const True)
   let getObservation = realToFrac . F.rgetField @Yield
@@ -126,7 +126,7 @@ main = do
     checkProblem mixedModel randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
     (th2_ML, pd2_ML, sigma2_ML, vBeta2_ML, vu2_ML, vb2_ML, cs_ML) <-
-      minimizeDeviance mdVerbosity ML mixedModel randomEffectCalc th0
+      minimizeDevianceLMM mdVerbosity ML mixedModel randomEffectCalc th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
@@ -142,7 +142,7 @@ main = do
            (SD.toSparseVector vBeta2_ML)
            (SD.toSparseVector vb2_ML)
     (th2_REML, pd2_REML, sigma2_REML, vBeta2_REML, vu2_REML, vb2_REML, cs_REML) <-
-      minimizeDeviance mdVerbosity REML mixedModel randomEffectCalc th0
+      minimizeDevianceLMM mdVerbosity REML mixedModel randomEffectCalc th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
@@ -180,12 +180,12 @@ main = do
     when verbose $ do
       cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
       (pdTest, sigma2Test, betaTest, uTest, bTest, _) <-
-        liftIO $ profiledDeviance PDVAll
-                                  cholmodFactor
-                                  REML
-                                  mixedModel
-                                  randomEffectCalc
-                                  th2_REML
+        liftIO $ profiledDevianceLMM PDVAll
+                                     cholmodFactor
+                                     REML
+                                     mixedModel
+                                     randomEffectCalc
+                                     th2_REML
       liftIO $ do
         putStrLn $ "pdTest=" ++ show pdTest
         putStrLn $ "betaTest=" ++ show betaTest

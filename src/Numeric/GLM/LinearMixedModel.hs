@@ -65,6 +65,78 @@ Z is n x q
 zTz is q x q, this is the part that will be sparse.
 -}
 
+profiledDevianceLMM
+  :: ProfiledDevianceVerbosity
+  -> CholmodFactor
+  -> DevianceType
+  -> MixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector -- ^ theta
+  -> IO
+       ( Double
+       , Double
+       , LA.Vector Double
+       , SLA.SpVector Double
+       , SLA.SpVector Double
+       , CholeskySolutions
+       ) -- ^ (pd, sigma^2, beta, u, b) 
+profiledDevianceLMM verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reCalc@(RandomEffectCalculated smZ mkLambda) vTh
+  = do
+    let n      = LA.size vY
+        (_, p) = LA.size mX
+        (_, q) = SLA.dim smZ
+        lambda = mkLambda vTh
+        smZS   = smZ SLA.## lambda --(smT SLA.## smS)
+        smZSt  = SLA.transpose smZS
+    cs@(CholeskySolutions smLth smRzx mRx svBeta svu) <-
+      cholmodCholeskySolutionsLMM cf mm reCalc vTh
+    when (verbosity == PDVAll) $ do
+      putStrLn "Z"
+      LA.disp 2 $ SD.toDenseMatrix smZ
+      putStrLn "Lambda"
+      LA.disp 2 $ SD.toDenseMatrix lambda
+      putStrLn "Lth"
+      LA.disp 2 $ SD.toDenseMatrix smLth
+      putStrLn "Rzx"
+      LA.disp 2 $ SD.toDenseMatrix smRzx
+      putStrLn "Rx"
+      LA.disp 2 mRx
+    let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
+        vBeta   = SD.toDenseVector svBeta
+        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
+        rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
+    let logLth        = logDetTriangularSM smLth
+        (dof, logDet) = case dt of
+          ML   -> (realToFrac n, logLth)
+          REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRx))
+        pd     = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+        sigma2 = rTheta2 / dof
+    when (verbosity == PDVAll) $ do
+      let (_, _, smP) = cf
+      putStrLn $ "smP="
+      LA.disp 1 $ SD.toDenseMatrix smP
+      putStrLn $ "rTheta^2=" ++ show rTheta2
+      putStrLn $ "2 * logLth=" ++ show (2 * logLth)
+      putStrLn $ "2 * logDet=" ++ show (2 * logDet)
+    when (verbosity == PDVAll || verbosity == PDVSimple) $ do
+      putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
+    return (pd, sigma2, vBeta, svu, svb, cs)
+
+cholmodCholeskySolutionsLMM
+  :: CholmodFactor
+  -> MixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector
+  -> IO CholeskySolutions
+cholmodCholeskySolutionsLMM cholmodFactor mixedModel randomEffCalcs vTh = do
+  let (cholmodC, cholmodF, _) = cholmodFactor
+      (MixedModel             (RegressionModel _ mX vY) levels  ) = mixedModel
+      (RandomEffectCalculated smZ mkLambda) = randomEffCalcs
+      lambda                  = mkLambda vTh
+      smZS                    = smZ SLA.## lambda
+  cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
+
+
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
 thetaLowerBounds :: FitSpecByGroup g -> NL.Bounds
 thetaLowerBounds groupFSM =
@@ -76,7 +148,7 @@ data MinimizeDevianceVerbosity = MDVNone | MDVSimple
 data SolutionComponents = SolutionComponents { mRX :: LA.Matrix Double, vBeta :: LA.Vector Double, vTheta :: LA.Vector Double, vb :: LA.Vector Double }
 
 -- b is an Enumeration of Effects/Predictors and g is an enumeration of groups
-minimizeDeviance
+minimizeDevianceLMM
   :: SemC r
   => MinimizeDevianceVerbosity
   -> DevianceType
@@ -93,14 +165,14 @@ minimizeDeviance
        , LA.Vector Double
        , CholeskySolutions
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
-minimizeDeviance verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0
+minimizeDevianceLMM verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0
   = do
     cholmodAnalysis <- cholmodAnalyzeProblem reCalc
     let
       pdv = case verbosity of
         MDVNone   -> PDVNone
         MDVSimple -> PDVSimple
-      pd x = profiledDeviance pdv cholmodAnalysis dt mixedModel reCalc x
+      pd x = profiledDevianceLMM pdv cholmodAnalysis dt mixedModel reCalc x
       obj x = unsafePerformIO $ fmap (\(d, _, _, _, _, _) -> d) $ pd x
       stop           = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
       thetaLB        = thetaLowerBounds levels

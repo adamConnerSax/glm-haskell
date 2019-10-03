@@ -33,7 +33,9 @@ import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace
 import           Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
 
 -- * glm
-import           Numeric.MixedModel
+import           Numeric.GLM.MixedModel
+import qualified Numeric.SparseDenseConversions
+                                               as SD
 --------------------------------------------------------------------------------
 
 main :: IO ()
@@ -58,17 +60,17 @@ main = do
         ]
   let ms = SquareSymmetricLower
   putStrLn $ "smX="
-  LA.disp 1 $ asDense smX
+  LA.disp 1 $ SD.toDenseMatrix smX
 --  mt                        <- spMatrixToTriplet c ms smX
-  (cholmodFactor, cholPerm) <- spMatrixAnalyze c ms smX
+  (cholmodFactor, cholPerm) <- spMatrixAnalyzeWP c ms smX
   cholL_CM                  <- spMatrixCholesky c cholmodFactor ms smX
   putStrLn $ "perm="
-  LA.disp 0 $ asDense cholPerm
+  LA.disp 0 $ SD.toDenseMatrix cholPerm
 
   putStrLn $ "L (CHOLMOD)="
-  LA.disp 2 $ asDense cholL_CM
+  LA.disp 2 $ SD.toDenseMatrix cholL_CM
   putStrLn $ "LLt="
-  LA.disp 2 $ asDense (cholL_CM SLA.## (SLA.transposeSM cholL_CM))
+  LA.disp 2 $ SD.toDenseMatrix (cholL_CM SLA.## (SLA.transposeSM cholL_CM))
 
   return ()
 {-
