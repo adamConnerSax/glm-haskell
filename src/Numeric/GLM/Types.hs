@@ -109,7 +109,7 @@ eitherLookup k m =
 data FixedEffects b where
   FixedEffects :: IndexedEffectSet b -> FixedEffects b
   InterceptOnly :: FixedEffects b
-  deriving (Show)
+  deriving (Show, Eq)
 
 allFixedEffects :: (Enum b, Ord b, Bounded b) => Bool -> FixedEffects b
 allFixedEffects True = FixedEffects $ IS.fromList [minBound ..]

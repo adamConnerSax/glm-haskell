@@ -38,7 +38,7 @@ import qualified Data.Text                     as T
 -- don't export this constructor !!
 data IndexedSet a where
   IndexedSet :: M.Map a Int -> IM.IntMap a -> IndexedSet a
-    deriving (Show)
+    deriving (Show, Eq)
 
 -- construction
 empty :: IndexedSet a

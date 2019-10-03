@@ -13,6 +13,7 @@ import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
 import qualified Numeric.SparseDenseConversions
                                                as SD
 import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.LinkFunction      as GLM
 import qualified Data.IndexedSet               as IS
 
 import qualified Polysemy                      as P
@@ -31,7 +32,7 @@ import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
 
-{-
+
 import qualified Numeric.LinearAlgebra.Class   as SLA
 import qualified Numeric.LinearAlgebra.Sparse  as SLA
 import           Numeric.LinearAlgebra.Sparse   ( (##)
@@ -41,10 +42,11 @@ import           Numeric.LinearAlgebra.Sparse   ( (##)
                                                 , (-=-)
                                                 , (-||-)
                                                 )
--}
+
 
 import qualified Numeric.LinearAlgebra         as LA
---import qualified Numeric.NLOPT                 as NL
+import qualified Numeric.NLOPT                 as NL
+import           System.IO.Unsafe               ( unsafePerformIO )
 
 
 
@@ -57,7 +59,7 @@ import qualified Data.Vector.Storable          as VS
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double
 
-data RegressionModel b = RegressionModel (GLM.FixedEffects b) FixedPredictors Observations
+data RegressionModel b = RegressionModel (GLM.FixedEffects b) FixedPredictors Observations deriving (Show, Eq)
 
 -- for group k, what group effects are we modeling?
 -- first Bool is for intercept, then (optional) vector,
@@ -112,7 +114,11 @@ fitSpecByGroup fixedEffects ebg rowClassifier = do
     maybe (Left lookupError) Right $ traverse lookupGroupSize $ M.toList ebg
   fmap M.fromList $ traverse makeSpec groupInfoList
 
-data MixedModel b g = MixedModel (RegressionModel b) (FitSpecByGroup g)
+data MixedModel b g = MixedModel (RegressionModel b) (FitSpecByGroup g) deriving (Show, Eq)
+
+data GeneralizedMixedModel b g =
+  LMM (MixedModel b g)
+  | GLMM (MixedModel b g) WMatrix GLM.LinkFunctionType deriving (Show, Eq)
 
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVector = LA.Vector Double
@@ -152,6 +158,79 @@ type GroupParameterEstimates = VB.Vector FixedParameterEstimates
 type SemC r = (MonadIO (P.Sem r), P.Member (P.Error T.Text) r)
 runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
+
+data MinimizeDevianceVerbosity = MDVNone | MDVSimple
+minimizeDeviance
+  :: SemC r
+  => MinimizeDevianceVerbosity
+  -> DevianceType
+  -> MixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector -- ^ initial guess for theta
+  -> P.Sem
+       r
+       ( LA.Vector Double
+       , Double
+       , Double
+       , LA.Vector Double
+       , LA.Vector Double
+       , LA.Vector Double
+       , CholeskySolutions
+       ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
+minimizeDeviance verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0
+  = do
+    cholmodAnalysis <- cholmodAnalyzeProblem reCalc
+    let
+      pdv = case verbosity of
+        MDVNone   -> PDVNone
+        MDVSimple -> PDVSimple
+      pd x = profiledDeviance pdv cholmodAnalysis dt mixedModel reCalc x
+      obj x = unsafePerformIO $ fmap (\(d, _, _, _, _, _) -> d) $ pd x
+      stop           = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
+      thetaLB        = thetaLowerBounds levels
+      algorithm      = NL.BOBYQA obj [thetaLB] Nothing
+      problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
+      expThetaLength = FL.fold
+        (FL.premap
+          (\l -> let e = effectsForGroup l in e + (e * (e - 1) `div` 2))
+          FL.sum
+        )
+        levels
+    when (LA.size th0 /= expThetaLength)
+      $  P.throw
+      $  "guess for theta has "
+      <> (T.pack $ show $ LA.size th0)
+      <> " entries but should have "
+      <> (T.pack $ show expThetaLength)
+      <> "."
+    let eSol = NL.minimizeLocal problem th0
+    case eSol of
+      Left  result                       -> P.throw (T.pack $ show result)
+      Right (NL.Solution pdS thS result) -> liftIO $ do
+        putStrLn
+          $  "Solution ("
+          ++ show result
+          ++ ") reached! At th="
+          ++ show thS
+        (pd, sigma2, vBeta, svu, svb, cs) <- pd thS
+        return
+          ( thS
+          , pd
+          , sigma2
+          , vBeta
+          , SD.toDenseVector svu
+          , SD.toDenseVector svb
+          , cs
+          )
+
+
+-- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
+thetaLowerBounds :: FitSpecByGroup g -> NL.Bounds
+thetaLowerBounds groupFSM =
+  let negInfinity :: Double = negate $ 1 / 0
+  in  NL.LowerBounds $ setCovarianceVector groupFSM 0 negInfinity --FL.fold fld levels
+
+
 
 setCovarianceVector :: FitSpecByGroup g -> Double -> Double -> LA.Vector Double
 setCovarianceVector groupFSM diag offDiag = FL.fold fld groupFSM
@@ -315,6 +394,64 @@ cholmodAnalyzeProblem (RandomEffectCalculated smZ _) = do
 
 data ProfiledDevianceVerbosity = PDVNone | PDVSimple | PDVAll deriving (Show, Eq)
 
+profiledDeviance
+  :: ProfiledDevianceVerbosity
+  -> CholmodFactor
+  -> DevianceType
+  -> MixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector -- ^ theta
+  -> IO
+       ( Double
+       , Double
+       , LA.Vector Double
+       , SLA.SpVector Double
+       , SLA.SpVector Double
+       , CholeskySolutions
+       ) -- ^ (pd, sigma^2, beta, u, b) 
+profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reCalc@(RandomEffectCalculated smZ mkLambda) vTh
+  = do
+    let n      = LA.size vY
+        (_, p) = LA.size mX
+        (_, q) = SLA.dim smZ
+        lambda = mkLambda vTh
+        smZS   = smZ SLA.## lambda --(smT SLA.## smS)
+        smZSt  = SLA.transpose smZS
+    cs@(CholeskySolutions smLth smRzx mRx svBeta svu) <-
+      cholmodCholeskySolutionsLMM cf mm reCalc vTh
+    when (verbosity == PDVAll) $ do
+      putStrLn "Z"
+      LA.disp 2 $ SD.toDenseMatrix smZ
+      putStrLn "Lambda"
+      LA.disp 2 $ SD.toDenseMatrix lambda
+      putStrLn "Lth"
+      LA.disp 2 $ SD.toDenseMatrix smLth
+      putStrLn "Rzx"
+      LA.disp 2 $ SD.toDenseMatrix smRzx
+      putStrLn "Rx"
+      LA.disp 2 mRx
+    let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
+        vBeta   = SD.toDenseVector svBeta
+        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
+        rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
+    let logLth        = logDetTriangularSM smLth
+        (dof, logDet) = case dt of
+          ML   -> (realToFrac n, logLth)
+          REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRx))
+        pd     = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+        sigma2 = rTheta2 / dof
+    when (verbosity == PDVAll) $ do
+      let (_, _, smP) = cf
+      putStrLn $ "smP="
+      LA.disp 1 $ SD.toDenseMatrix smP
+      putStrLn $ "rTheta^2=" ++ show rTheta2
+      putStrLn $ "2 * logLth=" ++ show (2 * logLth)
+      putStrLn $ "2 * logDet=" ++ show (2 * logDet)
+    when (verbosity == PDVAll || verbosity == PDVSimple) $ do
+      putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
+    return (pd, sigma2, vBeta, svu, svb, cs)
+
+
 upperTriangular :: Int -> Int -> a -> Bool
 upperTriangular r c _ = (r <= c)
 
@@ -352,6 +489,39 @@ normalEquationsRHS (NormalEquationsGLMM vW vMu vU) smU mV vY =
       rhsX = LA.tr mV LA.#> v1
   in  (rhsZ, rhsX)
 
+
+cholmodCholeskySolutionsLMM
+  :: CholmodFactor
+  -> MixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector
+  -> IO CholeskySolutions
+cholmodCholeskySolutionsLMM cholmodFactor mixedModel randomEffCalcs vTh = do
+  let (cholmodC, cholmodF, _) = cholmodFactor
+      (MixedModel             (RegressionModel _ mX vY) levels  ) = mixedModel
+      (RandomEffectCalculated smZ mkLambda) = randomEffCalcs
+      lambda                  = mkLambda vTh
+      smZS                    = smZ SLA.## lambda
+  cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
+
+spUV
+  :: GeneralizedMixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector
+  -> SLA.SpVector Double
+  -> SLA.SpVector Double
+  -> (UMatrix, VMatrix)
+spUV (GLMM (MixedModel (RegressionModel _ mX vY) _) vW lft) (RandomEffectCalculated smZ mkLambda) vTh svBeta svu
+  = let
+      (GLM.LinkFunction l inv dinv) = GLM.linkFunction lft
+      spLambda                      = mkLambda vTh
+      vEta = SD.toDenseVector (smZ #> svu) + mX LA.#> (SD.toDenseVector svBeta)
+      vdMudEta                      = VS.map dinv vEta
+      mWdMudEta                     = LA.diag $ VS.zipWith (*) vW vdMudEta
+      smU = SD.toSparseMatrix mWdMudEta SLA.#~# smZ SLA.#~# spLambda
+      mV                            = mWdMudEta LA.<> mX
+    in
+      (smU, mV)
 
 cholmodCholeskySolutions'
   :: CholmodFactor
@@ -400,80 +570,6 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel = do
   smLth <- CH.choleskyFactorSM cholmodF cholmodC
   return $ CholeskySolutions smLth smRzx mRxx svBeta svu
 
--- fitted values of input data
--- like "fitted" in lme4
-fitted
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b)
-  => (r -> b -> Double)
-  -> (r -> g -> T.Text)
-  -> GLM.FixedEffectStatistics b
-  -> GLM.EffectParametersByGroup g b
-  -> GLM.RowClassifier g
-  -> r
-  -> Either T.Text Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
-  = do
-    let applyEffect b e r = case b of
-          GLM.Intercept   -> e
-          GLM.Predictor b -> e * getPred r b
-        applyEffects ies v r =
-          FL.fold FL.sum
-            $ fmap
-                (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) r
-                )
-            $ IS.toIndexedList ies
-        groups = M.keys ebg
-        applyGroupEffects r group = do
-          labelIndex <- GLM.labelIndex rowClassifier group (getLabel r group)
-          (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
-          return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) r
-        fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
-    groupEffects <- traverse (applyGroupEffects row) $ M.keys ebg
-    return $ fixedEffects + FL.fold FL.sum groupEffects
-
-
--- Like "ranef" in lme4
-randomEffectsByLabel
-  :: (Ord g, Show g, Show b, Enum b, Bounded b)
-  => GLM.EffectParametersByGroup g b
-  -> GLM.RowClassifier g
-  -> Either
-       T.Text
-       (M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)]))
-randomEffectsByLabel ebg rowClassifier = do
-  let byLabel group (GLM.EffectParameters ies mEP) = do
-        indexedLabels <- M.toList <$> GLM.labelMap rowClassifier group
-        return
-          $ (ies, fmap (\(l, r) -> (l, LA.toRows mEP L.!! r)) indexedLabels)
-  M.traverseWithKey byLabel ebg
-
-
-colRandomEffectsByLabel
-  :: Show b
-  => GLM.IndexedEffectSet b
-  -> C.Colonnade C.Headed (T.Text, LA.Vector Double) T.Text
-colRandomEffectsByLabel ies =
-  let
-    indexedEffects = IS.toIndexedList ies
-    colLabel       = C.headed "Category" fst
-    colEffect (index, effect) = C.headed
-      (T.pack $ show effect)
-      (T.pack . show . flip LA.atIndex index . snd)
-  in
-    mconcat $ (colLabel : fmap colEffect indexedEffects)
-
-
-printRandomEffectsByLabel
-  :: (Show g, Show b)
-  => M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)])
-  -> T.Text
-printRandomEffectsByLabel rebg =
-  let printOne (g, (ies, x)) =
-        (T.pack $ show g)
-          <> ":\n"
-          <> (T.pack $ C.ascii (fmap T.unpack $ colRandomEffectsByLabel ies) x)
-          <> "\n"
-  in  mconcat $ fmap printOne $ M.toList rebg
 
 
 ---- Unused

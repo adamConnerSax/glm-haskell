@@ -9,7 +9,9 @@ module Main where
 
 import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.Types             as GLM
-import           Numeric.GLM.LinearMixedModel
+import           Numeric.GLM.MixedModel
+import qualified Numeric.GLM.Report            as GLM
+
 import qualified Numeric.SparseDenseConversions
                                                as SD
 import           DataFrames
@@ -126,23 +128,23 @@ main = do
     checkProblem mixedModel randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
     (th2_ML, pd2_ML, sigma2_ML, vBeta2_ML, vu2_ML, vb2_ML, cs_ML) <-
-      minimizeDevianceLMM mdVerbosity ML mixedModel randomEffectCalc th0
+      minimizeDeviance mdVerbosity ML mixedModel randomEffectCalc th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
       putStrLn $ "beta=" ++ show vBeta2_ML
       putStrLn $ "u=" ++ show vu2_ML
       putStrLn $ "b=" ++ show vb2_ML
-    report p
-           q
-           fitSpecByGroup
-           vY
-           mX
-           smZ
-           (SD.toSparseVector vBeta2_ML)
-           (SD.toSparseVector vb2_ML)
+    GLM.report p
+               q
+               fitSpecByGroup
+               vY
+               mX
+               smZ
+               (SD.toSparseVector vBeta2_ML)
+               (SD.toSparseVector vb2_ML)
     (th2_REML, pd2_REML, sigma2_REML, vBeta2_REML, vu2_REML, vb2_REML, cs_REML) <-
-      minimizeDevianceLMM mdVerbosity REML mixedModel randomEffectCalc th0
+      minimizeDeviance mdVerbosity REML mixedModel randomEffectCalc th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
@@ -150,42 +152,47 @@ main = do
       putStrLn $ "beta=" ++ show vBeta2_REML
       putStrLn $ "u=" ++ show vu2_REML
       putStrLn $ "b=" ++ show vb2_REML
-    report p
-           q
-           fitSpecByGroup
-           vY
-           mX
-           smZ
-           (SD.toSparseVector vBeta2_REML)
-           (SD.toSparseVector vb2_REML)
-    let fes_REML = fixedEffectStatistics fixedEffects sigma2_REML cs_REML
+    GLM.report p
+               q
+               fitSpecByGroup
+               vY
+               mX
+               smZ
+               (SD.toSparseVector vBeta2_REML)
+               (SD.toSparseVector vb2_REML)
+    let fes_REML = GLM.fixedEffectStatistics fixedEffects sigma2_REML cs_REML
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
     epg <- throwEither
-      $ effectParametersByGroup rowClassifier effectsByGroup vb2_REML
+      $ GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_REML
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
     gec <- throwEither
-      $ effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
+      $ GLM.effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
     liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
-    rebl <- throwEither $ randomEffectsByLabel epg rowClassifier
+    rebl <- throwEither $ GLM.randomEffectsByLabel epg rowClassifier
     liftIO
       $  putStrLn
       $  "Random Effects:\n"
-      ++ (T.unpack $ printRandomEffectsByLabel rebl)
+      ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
     let f r = do
           let obs = getObservation r
-          fitted <- fitted getPredictor groupLabels fes_REML epg rowClassifier r
+          fitted <- GLM.fitted getPredictor
+                               groupLabels
+                               fes_REML
+                               epg
+                               rowClassifier
+                               r
           return (obs, fitted)
     fitted <- throwEither $ traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
     when verbose $ do
       cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
       (pdTest, sigma2Test, betaTest, uTest, bTest, _) <-
-        liftIO $ profiledDevianceLMM PDVAll
-                                     cholmodFactor
-                                     REML
-                                     mixedModel
-                                     randomEffectCalc
-                                     th2_REML
+        liftIO $ profiledDeviance PDVAll
+                                  cholmodFactor
+                                  REML
+                                  mixedModel
+                                  randomEffectCalc
+                                  th2_REML
       liftIO $ do
         putStrLn $ "pdTest=" ++ show pdTest
         putStrLn $ "betaTest=" ++ show betaTest
