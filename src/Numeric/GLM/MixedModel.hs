@@ -24,25 +24,13 @@ import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
-import qualified Colonnade                     as C
-
 import qualified Data.Array                    as A
 import qualified Data.List                     as L
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
 
-
-import qualified Numeric.LinearAlgebra.Class   as SLA
-import qualified Numeric.LinearAlgebra.Sparse  as SLA
-import           Numeric.LinearAlgebra.Sparse   ( (##)
-                                                , (#^#)
-                                                , (<#)
-                                                , (#>)
-                                                , (-=-)
-                                                , (-||-)
-                                                )
-
+import           Numeric.LinearAlgebra.Sparse   ( (#>) )
 
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Numeric.NLOPT                 as NL
@@ -120,6 +108,11 @@ data GeneralizedMixedModel b g =
   LMM (MixedModel b g)
   | GLMM (MixedModel b g) WMatrix GLM.LinkFunctionType deriving (Show, Eq)
 
+mixedModel :: GeneralizedMixedModel b g -> MixedModel b g
+mixedModel (LMM x     ) = x
+mixedModel (GLMM x _ _) = x
+
+
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVector = LA.Vector Double
 type Lambda = SLA.SpMatrix Double
@@ -160,11 +153,12 @@ runPIRLS_M :: P.Sem '[P.Error T.Text, P.Lift IO] a -> IO (Either T.Text a)
 runPIRLS_M = P.runM . P.runError {-. P.runErrorAsAnother (T.pack . show)-}
 
 data MinimizeDevianceVerbosity = MDVNone | MDVSimple
+
 minimizeDeviance
   :: SemC r
   => MinimizeDevianceVerbosity
   -> DevianceType
-  -> MixedModel b g
+  -> GeneralizedMixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVector -- ^ initial guess for theta
   -> P.Sem
@@ -177,20 +171,21 @@ minimizeDeviance
        , LA.Vector Double
        , CholeskySolutions
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
-minimizeDeviance verbosity dt mixedModel@(MixedModel _ levels) reCalc@(RandomEffectCalculated smZ mkLambda) th0
+minimizeDeviance verbosity dt gmm reCalc@(RandomEffectCalculated smZ mkLambda) th0
   = do
     cholmodAnalysis <- cholmodAnalyzeProblem reCalc
     let
       pdv = case verbosity of
         MDVNone   -> PDVNone
         MDVSimple -> PDVSimple
-      pd x = profiledDeviance pdv cholmodAnalysis dt mixedModel reCalc x
+      pd x = profiledDeviance pdv cholmodAnalysis dt gmm reCalc x
       obj x = unsafePerformIO $ fmap (\(d, _, _, _, _, _) -> d) $ pd x
-      stop           = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
-      thetaLB        = thetaLowerBounds levels
-      algorithm      = NL.BOBYQA obj [thetaLB] Nothing
+      stop                = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
+      MixedModel _ levels = mixedModel gmm
+      thetaLB             = thetaLowerBounds levels
+      algorithm           = NL.BOBYQA obj [thetaLB] Nothing
       problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
-      expThetaLength = FL.fold
+      expThetaLength      = FL.fold
         (FL.premap
           (\l -> let e = effectsForGroup l in e + (e * (e - 1) `div` 2))
           FL.sum
@@ -398,7 +393,7 @@ profiledDeviance
   :: ProfiledDevianceVerbosity
   -> CholmodFactor
   -> DevianceType
-  -> MixedModel b g
+  -> GeneralizedMixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVector -- ^ theta
   -> IO
@@ -409,16 +404,20 @@ profiledDeviance
        , SLA.SpVector Double
        , CholeskySolutions
        ) -- ^ (pd, sigma^2, beta, u, b) 
-profiledDeviance verbosity cf dt mm@(MixedModel (RegressionModel _ mX vY) _) reCalc@(RandomEffectCalculated smZ mkLambda) vTh
+profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda) vTh
   = do
-    let n      = LA.size vY
+    let MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
+        n      = LA.size vY
         (_, p) = LA.size mX
         (_, q) = SLA.dim smZ
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
         smZSt  = SLA.transpose smZS
-    cs@(CholeskySolutions smLth smRzx mRx svBeta svu) <-
-      cholmodCholeskySolutionsLMM cf mm reCalc vTh
+    cs@(CholeskySolutions smLth smRzx mRx svBeta svu) <- getCholeskySolutions
+      cf
+      gmm
+      reCalc
+      vTh
     when (verbosity == PDVAll) $ do
       putStrLn "Z"
       LA.disp 2 $ SD.toDenseMatrix smZ
@@ -466,7 +465,7 @@ type Beta = LA.Vector Double
 
 data CholeskySolutions = CholeskySolutions { lTheta :: LTheta
                                            , rZX :: Rzx
-                                           , rX :: Rxx
+                                           , rXX :: Rxx
                                            , svBeta :: SLA.SpVector Double
                                            , svu :: SLA.SpVector Double
                                            } deriving (Show)
@@ -522,6 +521,26 @@ spUV (GLMM (MixedModel (RegressionModel _ mX vY) _) vW lft) (RandomEffectCalcula
       mV                            = mWdMudEta LA.<> mX
     in
       (smU, mV)
+
+getCholeskySolutions
+  :: CholmodFactor
+  -> GeneralizedMixedModel b g
+  -> RandomEffectCalculated
+  -> CovarianceVector
+  -> IO CholeskySolutions
+getCholeskySolutions cf (LMM mm) reCalc vTh =
+  cholmodCholeskySolutionsLMM cf mm reCalc vTh
+{-
+getCholeskySolutions cf (GLMM mm vW lft) reCalc vTH =
+  let
+    MixedModel (RegressionModel _ mX vY) levels   = mixedModel
+    n = LA.size vY
+    vMu0 = LA.fromList $ iterate n 0 -- FIXME ???? 
+    vU0  = LA.fromList $ iterate n 0 -- FIXME ????
+    delta = 
+-}
+
+
 
 cholmodCholeskySolutions'
   :: CholmodFactor

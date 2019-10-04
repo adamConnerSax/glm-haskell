@@ -118,17 +118,17 @@ main = do
     let
       mkLambda = makeLambda fitSpecByGroup
       (_, q)   = SLA.dim smZ
-      mixedModel =
-        MixedModel (RegressionModel fixedEffects mX vY) fitSpecByGroup
+      gmm =
+        LMM (MixedModel (RegressionModel fixedEffects mX vY) fitSpecByGroup)
       randomEffectCalc = RandomEffectCalculated smZ mkLambda
       th0              = setCovarianceVector fitSpecByGroup 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
-    checkProblem mixedModel randomEffectCalc
+    checkProblem (mixedModel gmm) randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
     (th2_ML, pd2_ML, sigma2_ML, vBeta2_ML, vu2_ML, vb2_ML, cs_ML) <-
-      minimizeDeviance mdVerbosity ML mixedModel randomEffectCalc th0
+      minimizeDeviance mdVerbosity ML gmm randomEffectCalc th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
@@ -144,7 +144,7 @@ main = do
                (SD.toSparseVector vBeta2_ML)
                (SD.toSparseVector vb2_ML)
     (th2_REML, pd2_REML, sigma2_REML, vBeta2_REML, vu2_REML, vb2_REML, cs_REML) <-
-      minimizeDeviance mdVerbosity REML mixedModel randomEffectCalc th0
+      minimizeDeviance mdVerbosity REML gmm randomEffectCalc th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
@@ -190,7 +190,7 @@ main = do
         liftIO $ profiledDeviance PDVAll
                                   cholmodFactor
                                   REML
-                                  mixedModel
+                                  gmm
                                   randomEffectCalc
                                   th2_REML
       liftIO $ do
