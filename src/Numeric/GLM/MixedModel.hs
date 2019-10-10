@@ -8,10 +8,12 @@
 {-# LANGUAGE TupleSections       #-}
 module Numeric.GLM.MixedModel where
 
-import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras as CH
-import qualified Numeric.SparseDenseConversions as SD
+import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
+                                               as CH
+import qualified Numeric.SparseDenseConversions
+                                               as SD
 import qualified Numeric.GLM.Types             as GLM
-import qualified Numeric.GLM.LinkFunction      as GLM
+import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Data.IndexedSet               as IS
 
 import qualified Polysemy                      as P
@@ -103,11 +105,11 @@ fitSpecByGroup fixedEffects ebg rowClassifier = do
 data RegressionModel b = RegressionModel (GLM.FixedEffects b) FixedPredictors Observations deriving (Show, Eq)
 data MixedModel b g = MixedModel (RegressionModel b) (FitSpecByGroup g) deriving (Show, Eq)
 
-data GeneralizedMixedModel b g =
+data GeneralizedLinearMixedModel b g =
   LMM (MixedModel b g)
-  | GLMM (MixedModel b g) WMatrix GLM.LinkFunctionType deriving (Show, Eq)
+  | GLMM (MixedModel b g) WMatrix GLM.ObservationDistribution deriving (Show, Eq)
 
-mixedModel :: GeneralizedMixedModel b g -> MixedModel b g
+mixedModel :: GeneralizedLinearMixedModel b g -> MixedModel b g
 mixedModel (LMM x     ) = x
 mixedModel (GLMM x _ _) = x
 
@@ -120,6 +122,8 @@ type WMatrix = LA.Vector Double -- constant weights
 type UMatrix = SLA.SpMatrix Double
 type VMatrix = LA.Matrix Double
 type LMatrix = SLA.SpMatrix Double -- Cholesky Z block
+type RzxMatrix = SLA.SpMatrix Double
+type RxxMatrix = LA.Matrix Double
 
 type BetaVec = LA.Vector Double
 type UVec = LA.Vector Double
@@ -159,7 +163,7 @@ minimizeDeviance
   :: SemC r
   => MinimizeDevianceVerbosity
   -> DevianceType
-  -> GeneralizedMixedModel b g
+  -> GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVec -- ^ initial guess for theta
   -> P.Sem
@@ -337,7 +341,7 @@ checkProblem (MixedModel (RegressionModel _ mX vY) _) (RandomEffectCalculated sm
 -- Lambda is built from lower-triangular blocks
 -- which are p_i x p_i.  Theta contains the values
 -- for each block, in col major order
-makeLambda :: FitSpecByGroup g -> (CovarianceVector -> Lambda)
+makeLambda :: FitSpecByGroup g -> (CovarianceVec -> LambdaMatrix)
 makeLambda groupFSM =
   let blockF vTH = FL.Fold
         (\(bs, vx) l' -> ((l', vx) : bs, VS.drop (effectsForGroup l') vx))
@@ -372,7 +376,7 @@ logDetTriangularM mX =
 
 type CholmodFactor = (CH.ForeignPtr CH.Common -- ^ pre-allocated CHOMOD common space
                      , CH.ForeignPtr CH.Factor -- ^ precomputed pattern work on Z
-                     , PermutationMatrix -- ^ permutation matrix from above
+                     , PMatrix -- ^ permutation matrix from above
                      )
 
 cholmodAnalyzeProblem
@@ -394,9 +398,9 @@ profiledDeviance
   :: ProfiledDevianceVerbosity
   -> CholmodFactor
   -> DevianceType
-  -> GeneralizedMixedModel b g
+  -> GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
-  -> CovarianceVector -- ^ theta
+  -> CovarianceVec -- ^ theta
   -> IO
        ( Double
        , Double
@@ -428,8 +432,8 @@ profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda
       LA.disp 2 $ SD.toDenseMatrix smLth
       putStrLn "Rzx"
       LA.disp 2 $ SD.toDenseMatrix smRzx
-      putStrLn "Rx"
-      LA.disp 2 mRx
+      putStrLn "Rxx"
+      LA.disp 2 mRxx
     let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
         vBeta   = SD.toDenseVector svBeta
         vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
@@ -454,23 +458,44 @@ profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda
 profiledDeviance'
   :: ProfiledDevianceVerbosity
   -> DevianceType
-  -> GeneralizedMixedModel b g
+  -> GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
-  -> CovarianceVec 
+  -> CovarianceVec
   -> LMatrix
+  -> RxxMatrix
   -> BetaVec
   -> UVec
-profiledDeviance' pdv dt gmm re vTh lTh vBeta vU =
-  let
-    MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
-    (RandomEffectsCalculated mZ mkLambda) = re    
-    lambda = mkLambda vTh
-    smZS = smZ SLA.#~# lambda
-    
-  
-linearPredictor :: FixedPredictors -> SLA.SpMatrix Double -> BetaVec -> UVec -> LA.Vector Double
+  -> Double
+profiledDeviance' pdv dt gmm re vTh smLth mRxx vBeta vU =
+  let MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
+      (          RandomEffectCalculated smZ                    mkLambda) = re
+      observationDistribution = case gmm of
+        LMM _       -> GLM.Normal
+        GLMM _ _ od -> od
+      lambda        = mkLambda vTh
+      smZS          = smZ SLA.#~# lambda
+      linPred       = linearPredictor mX smZS vBeta vU
+      logLth        = logDetTriangularSM smLth
+      dev2          = GLM.deviance observationDistribution vY linPred
+      rTheta2       = dev2 + (vU LA.<.> vU)
+      n             = LA.size vY
+      (_  , p     ) = LA.size mX
+      (dof, logDet) = case dt of
+        ML   -> (realToFrac n, logLth)
+        REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRxx))
+  in  (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+
+
+type LinearPredictor = LA.Vector Double
+
+linearPredictor
+  :: FixedPredictors
+  -> SLA.SpMatrix Double
+  -> BetaVec
+  -> UVec
+  -> LinearPredictor
 linearPredictor mX smZS vBeta vU =
-  mx LA.#> vBeta + (SD.toDenseVector $ smZS SLA.#> SD.toSparseVector vU) 
+  mX LA.#> vBeta + (SD.toDenseVector $ smZS SLA.#> SD.toSparseVector vU)
 
 upperTriangular :: Int -> Int -> a -> Bool
 upperTriangular r c _ = (r <= c)
@@ -514,29 +539,29 @@ cholmodCholeskySolutionsLMM
   :: CholmodFactor
   -> MixedModel b g
   -> RandomEffectCalculated
-  -> CovarianceVector
+  -> CovarianceVec
   -> IO CholeskySolutions
 cholmodCholeskySolutionsLMM cholmodFactor mixedModel randomEffCalcs vTh = do
   let (MixedModel             (RegressionModel _ mX vY) levels  ) = mixedModel
       (RandomEffectCalculated smZ mkLambda) = randomEffCalcs
-      lambda                  = mkLambda vTh
-      smZS                    = smZ SLA.## lambda
+      lambda = mkLambda vTh
+      smZS   = smZ SLA.## lambda
   cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
 
 spUV
-  :: GeneralizedMixedModel b g
+  :: GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
-  -> CovarianceVector
+  -> CovarianceVec
   -> SLA.SpVector Double
   -> SLA.SpVector Double
   -> (UMatrix, VMatrix)
 
-spUV (LMM (MixedModel (RegressionModel _ mX _))) (RandomEffectCalculated smZ mkLambda) vTh _ _ =
-  (smZ SLA.#~# mkLamda vTh, mX)
-  
-spUV (GLMM (MixedModel (RegressionModel _ mX vY) _) vW lft) (RandomEffectCalculated smZ mkLambda) vTh svBeta svu
+spUV (LMM (MixedModel (RegressionModel _ mX _) _)) (RandomEffectCalculated smZ mkLambda) vTh _ _
+  = (smZ SLA.#~# mkLambda vTh, mX)
+
+spUV (GLMM (MixedModel (RegressionModel _ mX vY) _) vW od) (RandomEffectCalculated smZ mkLambda) vTh svBeta svu
   = let
-      (GLM.LinkFunction l inv dinv) = GLM.linkFunction lft
+      (GLM.LinkFunction l inv dinv) = GLM.linkFunction (GLM.canonicalLink od)
       spLambda                      = mkLambda vTh
       vEta = SD.toDenseVector (smZ #> svu) + mX LA.#> (SD.toDenseVector svBeta)
       vdMudEta                      = VS.map dinv vEta
@@ -548,13 +573,14 @@ spUV (GLMM (MixedModel (RegressionModel _ mX vY) _) vW lft) (RandomEffectCalcula
 
 getCholeskySolutions
   :: CholmodFactor
-  -> GeneralizedMixedModel b g
+  -> GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
-  -> CovarianceVector
+  -> CovarianceVec
   -> IO CholeskySolutions
 getCholeskySolutions cf (LMM mm) reCalc vTh =
   cholmodCholeskySolutionsLMM cf mm reCalc vTh
 
+{-
 getCholeskySolutions cf glmm@(GLMM mm vW lft) reCalc vTH =
   let
     MixedModel (RegressionModel _ mX vY) levels   = mm
@@ -573,6 +599,7 @@ getCholeskySolutions cf glmm@(GLMM mm vW lft) reCalc vTH =
       
     diff v1 v2 =     
 
+
 glmmCholeskyStep
   :: CholmodFactor
   -> NormalEquations
@@ -583,9 +610,7 @@ glmmCholeskyStep
   -> SLA.SpVector Double
   -> IO CholeskySolutions
 glmmCholeskyStep mm vW lft svBeta svU =
-
-
-
+-}
 
 
 cholmodCholeskySolutions'
@@ -642,7 +667,7 @@ cholmodCholeskySolutions_Old
   :: CholmodFactor
   -> MixedModel b g
   -> RandomEffectCalculated
-  -> CovarianceVector
+  -> CovarianceVec
   -> IO CholeskySolutions
 cholmodCholeskySolutions_Old cholmodFactor mixedModel randomEffCalcs vTh = do
   let (cholmodC, cholmodF, _) = cholmodFactor

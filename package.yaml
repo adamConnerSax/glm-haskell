@@ -28,6 +28,7 @@ dependencies:
 - hcholmod >= 0.1.0 && < 0.2
 - hmatrix >= 0.20.0 && < 0.21
 - hmatrix-nlopt >= 0.1.2 && < 0.2
+- math-functions >= 0.3.0 && < 0.4
 - nonlinear-optimization >= 0.3.11 && < 0.4
 - nonlinear-optimization-ad >= 0.2 && < 0.3
 - polysemy >= 0.7.0 && < 0.8

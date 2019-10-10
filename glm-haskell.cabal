@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0eec714d3507fadf7f2c08fec6c5db9e2ff14744cbfe708c77bac7c655bad35a
+-- hash: 1ac92389cf07755f211890feb9583f23f712b79a6d46e6c6459a2c9eacb896e7
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -37,7 +37,7 @@ library
   exposed-modules:
       Data.IndexedSet
       GLM.Internal.Log
-      Numeric.GLM.LinkFunction
+      Numeric.GLM.FunctionFamily
       Numeric.GLM.MixedModel
       Numeric.GLM.Report
       Numeric.GLM.Types
@@ -72,6 +72,7 @@ library
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.20.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
     , polysemy >=0.7.0 && <0.8
@@ -119,6 +120,7 @@ test-suite CHOLMOD-test
     , hcholmod
     , hmatrix >=0.20.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
     , polysemy >=0.7.0 && <0.8
@@ -154,6 +156,7 @@ test-suite LMM-test
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.20.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , math-functions >=0.3.0 && <0.4
     , mtl
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
