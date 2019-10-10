@@ -434,21 +434,32 @@ profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda
       LA.disp 2 $ SD.toDenseMatrix smRzx
       putStrLn "Rxx"
       LA.disp 2 mRxx
-    let svb     = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
-        vBeta   = SD.toDenseVector svBeta
-        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
+    let svb   = lambda SLA.#> svu -- (smT SLA.## smS) SLA.#> svu
+        vBeta = SD.toDenseVector svBeta
+        vU    = SD.toDenseVector svu
+        (pd, rTheta2) =
+          profiledDeviance' verbosity dt gmm reCalc vTh smLth mRxx vBeta vU
+  {-        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
         rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
     let logLth        = logDetTriangularSM smLth
         (dof, logDet) = case dt of
           ML   -> (realToFrac n, logLth)
           REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRxx))
         pd     = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+-}
+        dof = case dt of
+          ML   -> realToFrac n
+          REML -> realToFrac (n - p)
         sigma2 = rTheta2 / dof
     when (verbosity == PDVAll) $ do
       let (_, _, smP) = cf
       putStrLn $ "smP="
       LA.disp 1 $ SD.toDenseMatrix smP
       putStrLn $ "rTheta^2=" ++ show rTheta2
+      let logLth = logDetTriangularSM smLth
+          logDet = case dt of
+            ML   -> logLth
+            REML -> logLth + logDetTriangularM mRxx
       putStrLn $ "2 * logLth=" ++ show (2 * logLth)
       putStrLn $ "2 * logDet=" ++ show (2 * logDet)
     when (verbosity == PDVAll || verbosity == PDVSimple) $ do
@@ -465,7 +476,7 @@ profiledDeviance'
   -> RxxMatrix
   -> BetaVec
   -> UVec
-  -> Double
+  -> (Double, Double) -- profiled deviance, deviance + u'u 
 profiledDeviance' pdv dt gmm re vTh smLth mRxx vBeta vU =
   let MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
       (          RandomEffectCalculated smZ                    mkLambda) = re
@@ -476,14 +487,15 @@ profiledDeviance' pdv dt gmm re vTh smLth mRxx vBeta vU =
       smZS          = smZ SLA.#~# lambda
       linPred       = linearPredictor mX smZS vBeta vU
       logLth        = logDetTriangularSM smLth
-      dev2          = GLM.deviance observationDistribution vY linPred
+      dev2 = GLM.deviance observationDistribution GLM.UseCanonical vY linPred
       rTheta2       = dev2 + (vU LA.<.> vU)
       n             = LA.size vY
       (_  , p     ) = LA.size mX
       (dof, logDet) = case dt of
         ML   -> (realToFrac n, logLth)
         REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRxx))
-  in  (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+      pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
+  in  (pd, rTheta2)
 
 
 type LinearPredictor = LA.Vector Double
