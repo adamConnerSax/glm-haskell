@@ -113,7 +113,6 @@ mixedModel :: GeneralizedLinearMixedModel b g -> MixedModel b g
 mixedModel (LMM x     ) = x
 mixedModel (GLMM x _ _) = x
 
-
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVec = LA.Vector Double
 type LambdaMatrix = SLA.SpMatrix Double
@@ -230,8 +229,6 @@ thetaLowerBounds groupFSM =
   let negInfinity :: Double = negate $ 1 / 0
   in  NL.LowerBounds $ setCovarianceVector groupFSM 0 negInfinity --FL.fold fld levels
 
-
-
 setCovarianceVector :: FitSpecByGroup g -> Double -> Double -> LA.Vector Double
 setCovarianceVector groupFSM diag offDiag = FL.fold fld groupFSM
  where
@@ -246,7 +243,6 @@ setCovarianceVector groupFSM diag offDiag = FL.fold fld groupFSM
     )
     []
     LA.fromList
-
 
 {-
 Z is the random effects model matrix
@@ -417,7 +413,7 @@ profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda
         (_, q) = SLA.dim smZ
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
-        smZSt  = SLA.transpose smZS
+--        smZSt  = SLA.transpose smZS
     cs@(CholeskySolutions smLth smRzx mRxx svBeta svu) <- getCholeskySolutions
       cf
       gmm
@@ -439,14 +435,6 @@ profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda
         vU    = SD.toDenseVector svu
         (pd, rTheta2) =
           profiledDeviance' verbosity dt gmm reCalc vTh smLth mRxx vBeta vU
-  {-        vDev    = vY - (mX LA.#> vBeta) - (SD.toDenseVector $ smZS SLA.#> svu)
-        rTheta2 = (vDev LA.<.> vDev) + (svu SLA.<.> svu)
-    let logLth        = logDetTriangularSM smLth
-        (dof, logDet) = case dt of
-          ML   -> (realToFrac n, logLth)
-          REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRxx))
-        pd     = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
--}
         dof = case dt of
           ML   -> realToFrac n
           REML -> realToFrac (n - p)
@@ -586,30 +574,47 @@ spUV (GLMM (MixedModel (RegressionModel _ mX vY) _) vW od) (RandomEffectCalculat
 getCholeskySolutions
   :: CholmodFactor
   -> GeneralizedLinearMixedModel b g
+  -> GLM.UseLink
   -> RandomEffectCalculated
   -> CovarianceVec
   -> IO CholeskySolutions
-getCholeskySolutions cf (LMM mm) reCalc vTh =
+getCholeskySolutions cf (LMM mm) _ reCalc vTh =
   cholmodCholeskySolutionsLMM cf mm reCalc vTh
 
-{-
-getCholeskySolutions cf glmm@(GLMM mm vW lft) reCalc vTH =
+
+getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTH =
   let
     MixedModel (RegressionModel _ mX vY) levels   = mm
     (RandomEffectCalculated smZ mkLambda) = reCalc
     smZS = smZ SLA.#~# mkLamda vTh
     n = LA.size vY
+    (_,q) = SLA.dim smZS  
     vBeta0 = LA.fromList $ iterate n 0 -- FIXME (fit fixed effects only and use that for beta0)
     vU0  = LA.fromList $ iterate n 0 -- FIXME (maybe 0 is right here??)
-    l = 0.1 --- FIXME ????
     deltaCCS svBeta svU = do
       let (smU, mV) = spUV glmm reCalc vTh svBeta svU
-          vEta = SD.toDenseVector (smZS SLA.#> svU) + (mX LA.#> SD.toDenseVector svBeta)
+          vEta = linearPredictor mX smZS (SD.toDenseVector vBeta) (SD.toDenseVector svU) 
           vMu = VS.map (invLink $ linkFunction lft) vEta
           neqs = NormalEquationsGLMM vW vMu (SD.toDenseVector svU)          
       solns <- cholmodCholeskySolutions' cf smU mV neqs mm
-      
-    diff v1 v2 =     
+      return (svBeta solns, svu solns, lTheta solns, rXX solns)
+    incS (svBeta, svU) (svdBeta, svdU) x =
+      ( svBeta SLA.^+^ (x SLA..* svdBeta)
+      , svU SLA.^+^ (x SLA..* svdU))
+    newBetaU (svBeta, svU) (svdBeta, svdU) smLth mRxx = 
+      let pdF = profiledDeviance' PDVNone ML glmm reCalc vTh smLth mRxx
+          pd0 = pdF svBeta svU
+          checkOne x = 
+            let (svBeta', svU') = incS (svBeta, svU) (svdBeta, svdU) x
+            in if pdF svBeta' svU' < pd0 then (Just (svBeta', svU')) else Nothing
+          check triesLeft x = case checkOne x of
+            Nothing -> if n > 1 then check (n-1) x/2 else Nothing
+            Just y -> Just y
+      in check 10 1.0
+
+
+convergence n q smL mV svU svDu
+          
 
 
 glmmCholeskyStep
@@ -622,7 +627,7 @@ glmmCholeskyStep
   -> SLA.SpVector Double
   -> IO CholeskySolutions
 glmmCholeskyStep mm vW lft svBeta svU =
--}
+
 
 
 cholmodCholeskySolutions'
