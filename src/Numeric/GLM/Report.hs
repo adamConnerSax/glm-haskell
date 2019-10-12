@@ -53,8 +53,9 @@ fixedEffectStatistics
   => GLM.FixedEffects b
   -> Double
   -> CholeskySolutions
+  -> SparseBetaU
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX svBeta _) =
+fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX) (BetaU svBeta _) =
   let means = SD.toDenseVector svBeta
       covs  = LA.scale sigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
   in  GLM.FixedEffectStatistics fe means covs

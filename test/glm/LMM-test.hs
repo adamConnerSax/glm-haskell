@@ -127,13 +127,17 @@ main = do
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem (mixedModel gmm) randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
-    (th2_ML, pd2_ML, sigma2_ML, vBeta2_ML, vu2_ML, vb2_ML, cs_ML) <-
-      minimizeDeviance mdVerbosity ML gmm randomEffectCalc th0
+    (th2_ML, pd2_ML, sigma2_ML, vBetaU2_ML, vb2_ML, cs_ML) <- minimizeDeviance
+      mdVerbosity
+      ML
+      gmm
+      randomEffectCalc
+      th0
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
-      putStrLn $ "beta=" ++ show vBeta2_ML
-      putStrLn $ "u=" ++ show vu2_ML
+      putStrLn $ "beta=" ++ show (betaVec vBetaU2_ML)
+      putStrLn $ "u=" ++ show (uVec vBetaU2_ML)
       putStrLn $ "b=" ++ show vb2_ML
     GLM.report p
                q
@@ -141,16 +145,16 @@ main = do
                vY
                mX
                smZ
-               (SD.toSparseVector vBeta2_ML)
+               (SD.toSparseVector $ betaVec vBetaU2_ML)
                (SD.toSparseVector vb2_ML)
-    (th2_REML, pd2_REML, sigma2_REML, vBeta2_REML, vu2_REML, vb2_REML, cs_REML) <-
+    (th2_REML, pd2_REML, sigma2_REML, vBetaU2_REML, vb2_REML, cs_REML) <-
       minimizeDeviance mdVerbosity REML gmm randomEffectCalc th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
       putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
-      putStrLn $ "beta=" ++ show vBeta2_REML
-      putStrLn $ "u=" ++ show vu2_REML
+      putStrLn $ "beta=" ++ show (betaVec vBetaU2_REML)
+      putStrLn $ "u=" ++ show (uVec vBetaU2_REML)
       putStrLn $ "b=" ++ show vb2_REML
     GLM.report p
                q
@@ -158,9 +162,12 @@ main = do
                vY
                mX
                smZ
-               (SD.toSparseVector vBeta2_REML)
+               (SD.toSparseVector $ betaVec vBetaU2_REML)
                (SD.toSparseVector vb2_REML)
-    let fes_REML = GLM.fixedEffectStatistics fixedEffects sigma2_REML cs_REML
+    let fes_REML = GLM.fixedEffectStatistics fixedEffects
+                                             sigma2_REML
+                                             cs_REML
+                                             (toSparseBetaU vBetaU2_REML)
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
     epg <- throwEither
       $ GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_REML
@@ -186,18 +193,18 @@ main = do
     liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
     when verbose $ do
       cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
-      (pdTest, sigma2Test, betaTest, uTest, bTest, _) <-
-        liftIO $ profiledDeviance PDVAll
-                                  cholmodFactor
-                                  REML
-                                  gmm
-                                  randomEffectCalc
-                                  th2_REML
+      (pdTest, sigma2Test, svBetaUTest, bTest, _) <- liftIO $ profiledDeviance
+        PDVAll
+        cholmodFactor
+        REML
+        gmm
+        randomEffectCalc
+        th2_REML
       liftIO $ do
         putStrLn $ "pdTest=" ++ show pdTest
-        putStrLn $ "betaTest=" ++ show betaTest
-        putStrLn $ "uTest=" ++ show (SD.toDenseVector uTest)
-        putStrLn $ "bTest=" ++ show (SD.toDenseVector bTest)
+        putStrLn $ "betaTest=" ++ show (betaVec $ svBetaUTest)
+        putStrLn $ "uTest=" ++ show (SD.toDenseVector $ uVec svBetaUTest)
+        putStrLn $ "bTest=" ++ show (SD.toDenseVector $ bTest)
   case resultEither of
     Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
     Right ()  -> putStrLn $ "Success!"
