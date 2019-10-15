@@ -79,3 +79,4 @@ deviance od ul vY vMu = go od
     let f y mu = (y - mu) / mu - log (y / mu)
     in  2 * (LA.sumElements $ LA.zipWith f vY vMu')
 
+

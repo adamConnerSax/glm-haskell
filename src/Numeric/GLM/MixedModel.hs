@@ -127,6 +127,7 @@ type RxxMatrix = LA.Matrix Double
 type BetaVec = LA.Vector Double
 type UVec = LA.Vector Double
 type MuVec = LA.Vector Double
+type EtaVec = LA.Vector Double
 
 data BetaU vt = BetaU { betaVec :: vt Double, uVec :: vt Double }
 type DenseBetaU = BetaU LA.Vector
@@ -441,12 +442,18 @@ profiledDeviance verbosity cf dt gmm reCalc@(RandomEffectCalculated smZ mkLambda
       putStrLn "Rxx"
       LA.disp 2 mRxx
     let
-      svb    = lambda SLA.#> (uVec svBetaU) -- (smT SLA.## smS) SLA.#> svu
-      vBetaU = toDenseBetaU svBetaU
---        vBeta = SD.toDenseVector svBeta
---        vU    = SD.toDenseVector svu
-      (pd, rTheta2) =
-        profiledDeviance' verbosity dt gmm reCalc vTh smLth mRxx vBetaU
+      svb           = lambda SLA.#> (uVec svBetaU)
+      vBetaU        = toDenseBetaU svBetaU
+      vEta          = linearPredictor mX smZS vBetaU
+      (pd, rTheta2) = profiledDeviance' verbosity
+                                        dt
+                                        gmm
+                                        reCalc
+                                        vTh
+                                        smLth
+                                        mRxx
+                                        vEta
+                                        (uVec vBetaU)
       dof = case dt of
         ML   -> realToFrac n
         REML -> realToFrac (n - p)
@@ -472,34 +479,30 @@ profiledDeviance'
   -> GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVec
-  -> LMatrix
-  -> RxxMatrix
-  -> DenseBetaU
+  -> CholeskySolutions
+  -> EtaVec
+  -> UVec
   -> (Double, Double) -- profiled deviance, deviance + u'u 
-profiledDeviance' pdv dt gmm re vTh smLth mRxx vBetaU =
+profiledDeviance' pdv dt gmm re vTh chol vEta vU =
   let MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
       (          RandomEffectCalculated smZ                    mkLambda) = re
       observationDistribution = case gmm of
         LMM _       -> GLM.Normal
         GLMM _ _ od -> od
-      vBeta         = betaVec vBetaU
-      vU            = uVec vBetaU
-      lambda        = mkLambda vTh
-      smZS          = smZ SLA.#~# lambda
-      linPred       = linearPredictor mX smZS vBetaU
-      logLth        = logDetTriangularSM smLth
-      dev2 = GLM.deviance observationDistribution GLM.UseCanonical vY linPred
+      logLth        = logDetTriangularSM (lTheta chol) 
+      dev2 = GLM.deviance observationDistribution GLM.UseCanonical vY vEta
       rTheta2       = dev2 + (vU LA.<.> vU)
       n             = LA.size vY
       (_  , p     ) = LA.size mX
       (dof, logDet) = case dt of
         ML   -> (realToFrac n, logLth)
-        REML -> (realToFrac (n - p), logLth + (logDetTriangularM mRxx))
+        REML -> (realToFrac (n - p), logLth + (logDetTriangularM $ rXX chol))
       pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
   in  (pd, rTheta2)
 
 
 type LinearPredictor = LA.Vector Double
+type SparseLinearPredictor = SLA.SpVector Double
 
 linearPredictor
   :: FixedPredictors -> SLA.SpMatrix Double -> DenseBetaU -> LinearPredictor
@@ -507,6 +510,17 @@ linearPredictor mX smZS vBetaU =
   mX
     LA.#> (betaVec vBetaU)
     +     (SD.toDenseVector $ smZS SLA.#> SD.toSparseVector (uVec vBetaU))
+
+
+sparseLinearPredictor
+  :: FixedPredictors
+  -> SLA.SpMatrix Double
+  -> SparseBetaU
+  -> SparseLinearPredictor
+sparseLinearPredictor mX smZS svBetaU =
+  SD.toSparseVector (mX LA.#> (SD.toDenseVector $ betaVec svBetaU))
+    SLA.^+^ (smZS SLA.#> uVec svBetaU)
+
 
 upperTriangular :: Int -> Int -> a -> Bool
 upperTriangular r c _ = (r <= c)
@@ -523,29 +537,36 @@ data CholeskySolutions = CholeskySolutions { lTheta :: LTheta
                                            , rZX :: Rzx
                                            , rXX :: Rxx
                                            } deriving (Show)
-{-
-                                           , svBeta :: SLA.SpVector Double
-                                           , svu :: SLA.SpVector Double
-                                           } deriving (Show)
--}
 
-data NormalEquations = NormalEquationsLMM | NormalEquationsGLMM WMatrix MuVec UVec
+data NormalEquations = NormalEquationsLMM | NormalEquationsGLMM WMatrix MuVec (SLA.SpVector Double)
 
 normalEquationsRHS
   :: NormalEquations
+  -> CholmodFactor
   -> UMatrix
   -> VMatrix
-  -> LA.Vector Double
-  -> (SLA.SpVector Double, LA.Vector Double)
-normalEquationsRHS NormalEquationsLMM smU mV vY =
-  (SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
+  -> Observations
+  -> IO (SLA.SpMatrix Double, LA.Vector Double)
+normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY = do
+  let svRhsZ = SLA.transpose smU SLA.#> SD.toSparseVector vY
+      vRhsX  = LA.tr mV LA.#> vY
+  smPRhsZ <- CH.solveSparse cholmodC
+                            cholmodF
+                            CH.CHOLMOD_P
+                            (SD.svColumnToSM svRhsZ)
+  return (smPRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 
-normalEquationsRHS (NormalEquationsGLMM vW vMu vU) smU mV vY =
-  let v1   = VS.zipWith (*) (VS.map sqrt vW) (vY - vMu)
-      rhsZ = (SLA.transpose smU SLA.#> SD.toSparseVector v1)
-        SLA.^-^ SD.toSparseVector vU
-      rhsX = LA.tr mV LA.#> v1
-  in  (rhsZ, rhsX)
+normalEquationsRHS (NormalEquationsGLMM vW vMu svU) (cholmodC, cholmodF, _) smU mV vY
+  = do
+    let vX   = VS.zipWith (*) (VS.map sqrt vW) (vY - vMu)
+        svUX = SLA.transpose smU SLA.#> (SD.toSparseVector vX)
+    smPUX <- CH.solveSparse cholmodC
+                            cholmodF
+                            CH.CHOLMOD_P
+                            (SD.svColumnToSM svUX)
+    let smPRhsZ = smPUX SLA.^-^ (SD.svColumnToSM svU)
+        rhsX    = LA.tr mV LA.#> vX
+    return (smPRhsZ, rhsX)
 
 
 cholmodCholeskySolutionsLMM
@@ -553,17 +574,18 @@ cholmodCholeskySolutionsLMM
   -> MixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVec
-  -> IO (CholeskySolutions, SparseBetaU)
+  -> IO (CholeskySolutions, Either T.Text SparseBetaU)
 cholmodCholeskySolutionsLMM cholmodFactor mixedModel randomEffCalcs vTh = do
   let (MixedModel             (RegressionModel _ mX vY) levels  ) = mixedModel
       (RandomEffectCalculated smZ mkLambda) = randomEffCalcs
       lambda = mkLambda vTh
       smZS   = smZ SLA.## lambda
-  cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
+      g (a, b) = (a, Right b)
+  g <*> cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
 
-linkFunction
-  :: GeneralizedLinearMixedModel b g -> GLM.UseLink -> GLM.LinkFunction
-linkFunction glmm ul = GLM.linkFunction $ case ul of
+linkFunctionType
+  :: GeneralizedLinearMixedModel b g -> GLM.UseLink -> GLM.LinkFunctionType
+linkFunctionType glmm ul = case ul of
   GLM.UseOther x   -> x
   GLM.UseCanonical -> GLM.canonicalLink $ case glmm of
     LMM _       -> GLM.Normal
@@ -574,24 +596,36 @@ spUV
   -> GLM.UseLink
   -> RandomEffectCalculated
   -> CovarianceVec
-  -> SparseBetaU
+  -> LinearPredictor
   -> (UMatrix, VMatrix)
 
 spUV (LMM (MixedModel (RegressionModel _ mX _) _)) _ (RandomEffectCalculated smZ mkLambda) vTh _
   = (smZ SLA.#~# mkLambda vTh, mX)
 
-spUV glmm@(GLMM (MixedModel (RegressionModel _ mX vY) _) vW _) ul (RandomEffectCalculated smZ mkLambda) vTh svBetaU
-  = let (GLM.LinkFunction l inv dinv) = linkFunction glmm ul --GLM.linkFunction (GLM.canonicalLink od)
-        spLambda                      = mkLambda vTh
-        vEta =
-          SD.toDenseVector (smZ #> uVec svBetaU)
-            +     mX
-            LA.#> (SD.toDenseVector $ betaVec svBetaU)
-        vdMudEta  = VS.map dinv vEta
-        mWdMudEta = LA.diag $ VS.zipWith (*) vW vdMudEta
-        smU       = SD.toSparseMatrix mWdMudEta SLA.#~# smZ SLA.#~# spLambda
-        mV        = mWdMudEta LA.<> mX
+spUV glmm@(GLMM (MixedModel (RegressionModel _ mX _) _) vW _) ul (RandomEffectCalculated smZ mkLambda) vTh vEta
+  = let smZS      = smZ SLA.#~# mkLambda vTh
+        mWdMudEta = LA.diag $ weights
+          mX
+          smZS
+          vW
+          (GLM.linkFunction $ linkFunctionType glmm ul)
+          vEta
+        smU = SD.toSparseMatrix mWdMudEta SLA.#~# smZS
+        mV  = mWdMudEta LA.<> mX
     in  (smU, mV)
+
+type ZStarMatrix = SLA.SpMatrix Double
+
+weights
+  :: FixedPredictors
+  -> ZStarMatrix
+  -> WMatrix
+  -> GLM.LinkFunction
+  -> LinearPredictor
+  -> WMatrix
+weights mX smZS vW lf vEta =
+  let vdMudEta = VS.map (GLM.derivInv lf) vEta
+  in  VS.zipWith (*) (VS.map sqrt vW) vdMudEta
 
 getCholeskySolutions
   :: CholmodFactor
@@ -599,66 +633,127 @@ getCholeskySolutions
   -> GLM.UseLink
   -> RandomEffectCalculated
   -> CovarianceVec
-  -> IO (CholeskySolutions, SparseBetaU)
+  -> IO (CholeskySolutions, Either T.Text SparseBetaU)
 getCholeskySolutions cf (LMM mm) _ reCalc vTh =
   cholmodCholeskySolutionsLMM cf mm reCalc vTh
 
-{-
+
 -- TODO: There is much low hanging fruit here in terms of not re-calcing things
 -- 
-getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTH =
-  let
-    MixedModel (RegressionModel _ mX vY) levels   = mm
-    (RandomEffectCalculated smZ mkLambda) = reCalc
-    smZS = smZ SLA.#~# mkLamda vTh
-    n = LA.size vY
-    (_,q) = SLA.dim smZS  
-    vBeta0 = LA.fromList $ iterate n 0 -- FIXME (fit fixed effects only and use that for beta0)
-    vU0  = LA.fromList $ iterate n 0 -- FIXME (maybe 0 is right here??)
-    lf = linkFunction glmm ul
-    deltaCCS svBetaU = do
-      let (smU, mV) = spUV glmm ul reCalc vTh svBetaU
-          vEta = linearPredictor mX smZS (toDenseBetaU svBetaU)
-          vMu = VS.map (invLink lf) vEta
-          neqs = NormalEquationsGLMM vW vMu (SD.toDenseVector $ vecU svBetaU)          
-      (chol, svBetaU') <- cholmodCholeskySolutions' cf smU mV neqs mm
-      return (svBetaU', lTheta solns, rXX solns)
-    incS svBetaU svdBetaU x =
-      binaryOpBetaU (SLA.^+^) svBetaU (unaryOpBetaU (x .*) svdBetaU)
-    newBetaU (svBeta, svU) (svdBeta, svdU) smLth mRxx = 
-      let pdF = profiledDeviance' PDVNone ML glmm reCalc vTh smLth mRxx
-          pd0 = pdF svBeta svU
-          checkOne x = 
-            let (svBeta', svU') = incS (svBeta, svU) (svdBeta, svdU) x
-            in if pdF svBeta' svU' < pd0 then (Just (svBeta', svU')) else Nothing
-          check triesLeft x = case checkOne x of
-            Nothing -> if n > 1 then check (n-1) x/2 else Nothing
-            Just y -> Just y
-      in check 10 1.0
+getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh = do
+  let MixedModel (RegressionModel _ mX vY) levels = mm
+      (RandomEffectCalculated smZ mkLambda) = reCalc
+      smZS        = smZ SLA.#~# mkLambda vTh
+      n           = LA.size vY
+      (_, q)      = SLA.dim smZS
+      (_, _, smP) = cf
+      svEta0      = SD.toSparseVector $ computeEta0 (linkFunctionType glmm ul) vY
+      svU0         = SD.toSparseVector $ LA.fromList $ iterate n 0 -- FIXME (maybe 0 is right here??)
+      lf = GLM.linkFunction $ linkFunctionType glmm ul
+      deltaCCS svEta svU = do     
+        let (smU, mV) = spUV glmm ul reCalc vTh svEta
+            vMu       = VS.map (GLM.invLink lf) (SD.toDenseVector svEta)
+            neqs      = NormalEquationsGLMM vW vMu svU
+        (chol, svdBetaU) <- cholmodCholeskySolutions' cf smU mV neqs mm
+        return (svdBetaU, chol, smU)
+      incS svBetaU svdBetaU x =
+        binaryOpBetaU (SLA.^+^) svBetaU (unaryOpBetaU (x SLA..*) svdBetaU)
+      refineDBetaU vEta vU svdBetaU chol =
+        let pdF vEta vU = profiledDeviance' PDVNone ML glmm reCalc vTh chol
+            pd0 = pdF vEta vU            
+            checkOne x =              
+              let vU' = vU + LA.scale x (SD.toDenseVector $ uVec svdBetaU) --svBetaU' = incS svBetaU svdBetaU x
+                  vdEta = linearPredictor mX smZS (toDenseBetaU svdBetaU)
+                  vEta' = vEta + LA.scale x vdEta
+              in  if pdF vEta' vU' < pd0 then Just (vEta', vU') else Nothing
+            check triesLeft x = case checkOne x of
+              Nothing -> if n > 1
+                then check (n - 1) x / 2
+                else Left "Too many step-halvings in getCholeskySolutions."
+              Just y -> Right y
+        in  check 10 1.0
+      iterateOne svEta svU =
+        let (svdBetaU, chol, smU) =
+              deltaCCS svEta svU
+        in  (refineDBetaU (SD.toDenseVector svEta) (SD.toDenseVector svU) svdBetaU chol, chol, svdBetaU, smU)
+      iterateUntilConverged n convergedOCC svEta svU = case iterateOne svEta svU of
+        Left err -> Left err
+        Right ((vEta', vU'), chol, svdBetaU, smU) ->
+          let occ = orthogonalConvergence
+                    glmm
+                    ul
+                    smZS
+                    smP
+                    (lTheta chol)
+                    smU
+                    vY
+                    vEta'
+                    (SD.toSparseVector vU')
+                    (SD.toDenseVector $ uVec svdBetaU)  
+          in  if occ < convergedOCC
+              then Right (vEta', vU', chol)
+              else
+                (if n == 1
+                  then Left "Too many iterations in getCholeskySolutions."
+                  else iterateUntilConverged (n - 1) convergedOCC svBetaU'
+                )
+      getBetaU ((vEta, vU),_,_,_) = BetaU (betaFromXZStarEtaU mX smZS (SD.toSparseVector vU) (SD.toSparseVector vEta)) vU      
+      in (chol, fmap getBetaU iterateUntilConverged 10 0.001 vEta0 vU0)
 
 orthogonalConvergence
-  :: GeneralizedMixedModel b g
+  :: GeneralizedLinearMixedModel b g
   -> GLM.UseLink
-  -> SLA.SpMatrix Double -- Z*Lambda(theta)
+  -> ZStarMatrix -- Z*Lambda(theta)
   -> PMatrix
   -> LMatrix
-  -> VMatrix
-  -> UVec
-  -> BetaVec
+  -> UMatrix
+  -> Observations
+  -> EtaVec
   -> SLA.SpVector Double
-orthogonalConvergence glmm ul smZS smP smL vU vBeta svdU =
+  -> UVec
+  -> SLA.SpVector Double
+orthogonalConvergence glmm ul smZS smP smL smU vY vEta svU vdU =
   let MixedModel (RegressionModel _ mX vY) _ = mixedModel glmm
       lft = case ul of
-        UseOther x -> x
-        UseCanonical -> canonicalLink $ case glmm of
-          LMM -> Normal
+        GLM.UseOther x   -> x
+        GLM.UseCanonical -> canonicalLink $ case glmm of
+          LMM         -> Normal
           GLMM _ _ od -> od
-      vEta = linearPredictor mX smZS vBeta vU
-      vMu = VS.map (invLink $ linkFunction lft) vEta
-      x1 = SLA.transpose smL SLA.#> svdU
-      x2 = smP SLA.#~# (SLA.
+      vMu        = VS.map (invLink $ linkFunction lft) vEta
+      svYMinusMu = SD.toSparseVector $ vY - vMu
+      x1         = SLA.transpose smL SLA.#> vdU 
+      x2 =
+        smP
+          SLA.#>  (SLA.transpose svU SLA.#> svYMinusMu)
+          SLA.^-^ svU
+      q' = realToFrac $ snd $ SLA.dim smZS
+      n' = realToFrac $ LA.size vY
+  in  (SLA.norm2 x1 / sqrt q') / (SLA.norm2 x2 / sqrt (n' - q'))
 
+-- compute a starting point for the linear predictor.  Just assume the given observations but fix any out of bounds
+-- That is, assume mu = y* and then eta = g (mu) = g (y*) where
+-- y* is y, but with some care at the boundaries.  That is, y but with all elements in the domain of g.
+computeEta0 :: GLM.LinkFunctionType -> Observations -> LA.Vector Double
+computeEta0 lft vY =
+  let lF = link $ linkFunction LogisticLink
+      f x = case lft of
+        GLM.IdentityLink -> x
+        GLM.LogisticLink -> maximum (minimum (0.0001, x), 0.99999)
+        GLM.ExponentialLink -> minimum (0.0001, x)
+  in VS.map (lF . f) vY
 
+-- NB: eta = X <*> Beta + Z* <*> u
+-- X <*> Beta = eta - Z* <*> u
+-- X'X <*> Beta = X' <*> (eta - Z* <*> u)
+-- Beta = inverse(X'X) <*> X' <*> (eta - Z* <*> u)
+-- and X'X is symmetric positive definite so we solve the above via Cholesky
+betaFromXZStarEtaU :: FixedPredictors -> SLA.SpMatrix Double -> SLA.SpVector Double -> SLA.SpVector Double -> BetaVec
+betaFromXZStarEtaU mX smZS svU svEta =
+  let vRhs = LA.tr mX LA.#> (SD.toDenseVector $ (smZS SLA.#> svU) SLA.^-^ svEta)
+      cXtX = LA.chol $ LA.trustSym $ LA.tr mX LA.<> mX
+  in LA.cholSolve cXtX (LA.asColumn vRhs)
+
+{-
 glmmCholeskyStep
   :: CholmodFactor
   -> NormalEquations
@@ -680,22 +775,18 @@ cholmodCholeskySolutions'
   -> MixedModel b g
   -> IO (CholeskySolutions, SparseBetaU)
 cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel = do
-  let (cholmodC, cholmodF, _) = cholmodFactor
+  let (cholmodC, cholmodF, smP) = cholmodFactor
       (MixedModel (RegressionModel _ _ vY) _) = mixedModel
-      n                       = LA.size vY
-      (_, p)                  = LA.size mV
-      (_, q)                  = SLA.dim smU
+      n                         = LA.size vY
+      (_, p)                    = LA.size mV
+      (_, q)                    = SLA.dim smU
   -- Cholesky factorize to get L_theta *and* update factor for solving with it
   CH.spMatrixFactorize cholmodC cholmodF CH.SquareSymmetricLower
     $ SLA.filterSM lowerTriangular
     $ xTxPlusI
     $ smU
   -- compute Rzx
-  let (svRhsZ, vRhsX) = normalEquationsRHS nes smU mV vY
-  smPRhsZ <- CH.solveSparse cholmodC
-                            cholmodF
-                            CH.CHOLMOD_P
-                            (SD.svColumnToSM svRhsZ)
+  (smPRhsZ, vRhsX) <- normalEquationsRHS nes cholmodFactor smU mV vY
   svC <- SLA.toSV <$> CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPRhsZ
   let smUtV = (SLA.transpose smU) SLA.#~# (SD.toSparseMatrix mV)
   smPUtV <- CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smUtV -- PU'V

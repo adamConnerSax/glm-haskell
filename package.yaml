@@ -31,9 +31,9 @@ dependencies:
 - math-functions >= 0.3.0 && < 0.4
 - nonlinear-optimization >= 0.3.11 && < 0.4
 - nonlinear-optimization-ad >= 0.2 && < 0.3
-- polysemy >= 0.7.0 && < 0.8
-- polysemy-zoo >= 0.3.0 && < 0.5
-- polysemy-plugin >= 0.2.2 && < 0.3
+- polysemy >= 0.7.0 && < 1.3
+- polysemy-zoo >= 0.3.0 && < 0.8
+- polysemy-plugin >= 0.2.2 && < 0.5
 - profunctors >= 5.3 && < 5.5
 - sparse-linear-algebra >= 0.3 && < 0.4
 - statistics >= 0.15.0 && < 0.16
