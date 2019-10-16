@@ -14,6 +14,7 @@ import qualified Numeric.SparseDenseConversions
                                                as SD
 
 import qualified Polysemy                      as P
+import qualified Polysemy.Error                as P
 import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
@@ -48,31 +49,34 @@ Z is n x q
 zTz is q x q, this is the part that will be sparse.
 -}
 
+eitherToSem :: Effects r => Either T.Text a -> P.Sem r a
+eitherToSem = either (P.throw . OtherGLMError) return
+
 fixedEffectStatistics
   :: (Ord b, Enum b, Bounded b)
   => GLM.FixedEffects b
   -> Double
   -> CholeskySolutions
-  -> SparseBetaU
+  -> BetaU
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX) (BetaU svBeta _) =
-  let means = SD.toDenseVector svBeta
+fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX) (BetaU vBeta _) =
+  let means = vBeta
       covs  = LA.scale sigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
   in  GLM.FixedEffectStatistics fe means covs
 
 effectParametersByGroup
-  :: (Ord g, Show g, Show b)
+  :: (Ord g, Show g, Show b, Effects r)
   => GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
   -> LA.Vector Double
-  -> Either T.Text (GLM.EffectParametersByGroup g b)
+  -> P.Sem r (GLM.EffectParametersByGroup g b)
 effectParametersByGroup rc ebg vb = do
   let groups = IS.members $ GLM.groupIndices rc
       groupOffset group = do
         size     <- GLM.groupSize rc group
         nEffects <- IS.size <$> GLM.groupEffects ebg group
         return $ size * nEffects
-  offsets <- FL.prescan FL.sum <$> traverse groupOffset groups
+  offsets <- eitherToSem $ FL.prescan FL.sum <$> traverse groupOffset groups
   let
     ep (group, offset) = do
       size    <- GLM.groupSize rc group
@@ -84,15 +88,15 @@ effectParametersByGroup rc ebg vb = do
               $ VS.take (size * nEffects)
               $ VS.drop offset vb
       return (group, GLM.EffectParameters effects parameterMatrix)
-  fmap M.fromList $ traverse ep $ zip groups offsets
+  eitherToSem $ fmap M.fromList $ traverse ep $ zip groups offsets
 
 
 effectCovariancesByGroup
-  :: (Ord g, Show g, Enum b, Bounded b, Show b)
+  :: (Ord g, Show g, Enum b, Bounded b, Show b, Effects r)
   => GLM.EffectsByGroup g b
   -> Double
   -> LA.Vector Double
-  -> Either T.Text (GLM.EffectCovariancesByGroup g b)
+  -> P.Sem r (GLM.EffectCovariancesByGroup g b)
 effectCovariancesByGroup ebg sigma2 vTh = do
   let
     groups = M.keys ebg
@@ -103,7 +107,7 @@ effectCovariancesByGroup ebg sigma2 vTh = do
     tF ((r, c), x) = if r > c then Just ((c, r), x) else Nothing
     tAssocs l = catMaybes $ fmap tF l
     makeLT n v = let l = ltAssocs n v in LA.assoc (n, n) 0 $ l ++ (tAssocs l)
-  offsets <- FL.prescan FL.sum <$> traverse groupOffset groups
+  offsets <- eitherToSem $ FL.prescan FL.sum <$> traverse groupOffset groups
   let ecs (group, offset) = do
         effects <- GLM.groupEffects ebg group
         let nEffects = IS.size effects
@@ -113,11 +117,11 @@ effectCovariancesByGroup ebg sigma2 vTh = do
                 $ VS.take (nElements nEffects)
                 $ VS.drop offset vTh
         return (group, GLM.GroupEffectCovariances effects cm)
-  fmap M.fromList $ traverse ecs $ zip groups offsets
+  eitherToSem $ fmap M.fromList $ traverse ecs $ zip groups offsets
 
 
 report
-  :: (LA.Container LA.Vector Double, SemC r)
+  :: (LA.Container LA.Vector Double, EffectsIO r)
   => Int -- ^ p
   -> Int -- ^ q
   -> FitSpecByGroup g
@@ -166,49 +170,48 @@ report p q groupFSM vY mX smZ svBeta svb = do
 -- fitted values of input data
 -- like "fitted" in lme4
 fitted
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b)
-  => (r -> b -> Double)
-  -> (r -> g -> T.Text)
+  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, Effects r)
+  => (q -> b -> Double)
+  -> (q -> g -> T.Text)
   -> GLM.FixedEffectStatistics b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
-  -> r
-  -> Either T.Text Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
+  -> q
+  -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
 fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
   = do
-    let applyEffect b e r = case b of
+    let applyEffect b e q = case b of
           GLM.Intercept   -> e
-          GLM.Predictor b -> e * getPred r b
-        applyEffects ies v r =
+          GLM.Predictor b -> e * getPred q b
+        applyEffects ies v q =
           FL.fold FL.sum
             $ fmap
-                (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) r
+                (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) q
                 )
             $ IS.toIndexedList ies
         groups = M.keys ebg
-        applyGroupEffects r group = do
-          labelIndex <- GLM.labelIndex rowClassifier group (getLabel r group)
+        applyGroupEffects q group = do
+          labelIndex <- GLM.labelIndex rowClassifier group (getLabel q group)
           (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
-          return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) r
+          return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) q
         fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
-    groupEffects <- traverse (applyGroupEffects row) $ M.keys ebg
+    groupEffects <- eitherToSem $ traverse (applyGroupEffects row) $ M.keys ebg
     return $ fixedEffects + FL.fold FL.sum groupEffects
 
 
 -- Like "ranef" in lme4
 randomEffectsByLabel
-  :: (Ord g, Show g, Show b, Enum b, Bounded b)
+  :: (Ord g, Show g, Show b, Enum b, Bounded b, Effects r)
   => GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
-  -> Either
-       T.Text
+  -> P.Sem r
        (M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)]))
 randomEffectsByLabel ebg rowClassifier = do
   let byLabel group (GLM.EffectParameters ies mEP) = do
         indexedLabels <- M.toList <$> GLM.labelMap rowClassifier group
         return
           $ (ies, fmap (\(l, r) -> (l, LA.toRows mEP L.!! r)) indexedLabels)
-  M.traverseWithKey byLabel ebg
+  eitherToSem $ M.traverseWithKey byLabel ebg
 
 
 colRandomEffectsByLabel

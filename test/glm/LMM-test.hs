@@ -37,13 +37,13 @@ import qualified Data.Vector                   as VB
 
 verbose = False
 
-throwEither :: (P.Member (P.Error T.Text) r) => Either T.Text a -> P.Sem r a
+throwEither :: (P.Member (P.Error GLMError) r) => Either GLMError a -> P.Sem r a
 throwEither x = case x of
-  Left  msg -> P.throw msg
+  Left e -> P.throw e
   Right x   -> return x
 
-throwMaybe :: (P.Member (P.Error T.Text) r) => T.Text -> Maybe a -> P.Sem r a
-throwMaybe msg x = throwEither $ maybe (Left msg) Right x
+throwMaybe :: (P.Member (P.Error GLMError) r) => T.Text -> Maybe a -> P.Sem r a
+throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
 
 main :: IO ()
 main = do
@@ -83,7 +83,7 @@ main = do
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
 -}
-  resultEither <- runPIRLS_M $ do
+  resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
                         fixedEffects
@@ -92,15 +92,15 @@ main = do
                         groupLabels
           )
           frame
-    rowClassifier  <- throwEither rcM
-    fitSpecByGroup <- throwEither
-      $ fitSpecByGroup fixedEffects effectsByGroup rowClassifier
+    rowClassifier  <- throwEither $ either (Left . OtherGLMError) Right rcM
+    fitSpecByGroup <- fitSpecByGroup fixedEffects effectsByGroup rowClassifier
     let (n, p) = LA.size mX
         rcRows = VB.length $ GLM.rowInfos rowClassifier
     when verbose $ liftIO $ do
       putStrLn $ "classifiers=" ++ show rowClassifier
     when (rcRows /= n)
       $  P.throw
+      $ OtherGLMError
       $  "Only "
       <> (T.pack $ show rcRows)
       <> " in vRC but there are "
@@ -113,8 +113,7 @@ main = do
       putStrLn "X="
       LA.disp 2 mX
       putStrLn $ "levels=" ++ show fitSpecByGroup
-    smZ <- throwMaybe "Error making Z, the random effect model matrix"
-      $ makeZ mX fitSpecByGroup rowClassifier
+    smZ <- makeZ mX fitSpecByGroup rowClassifier
     let
       mkLambda = makeLambda fitSpecByGroup
       (_, q)   = SLA.dim smZ
@@ -136,8 +135,8 @@ main = do
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
-      putStrLn $ "beta=" ++ show (betaVec vBetaU2_ML)
-      putStrLn $ "u=" ++ show (uVec vBetaU2_ML)
+      putStrLn $ "beta=" ++ show (vBeta vBetaU2_ML)
+      putStrLn $ "u=" ++ show (svU vBetaU2_ML)
       putStrLn $ "b=" ++ show vb2_ML
     GLM.report p
                q
@@ -145,7 +144,7 @@ main = do
                vY
                mX
                smZ
-               (SD.toSparseVector $ betaVec vBetaU2_ML)
+               (SD.toSparseVector $ vBeta vBetaU2_ML)
                (SD.toSparseVector vb2_ML)
     (th2_REML, pd2_REML, sigma2_REML, vBetaU2_REML, vb2_REML, cs_REML) <-
       minimizeDeviance mdVerbosity REML gmm randomEffectCalc th0
@@ -153,8 +152,8 @@ main = do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
       putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
-      putStrLn $ "beta=" ++ show (betaVec vBetaU2_REML)
-      putStrLn $ "u=" ++ show (uVec vBetaU2_REML)
+      putStrLn $ "beta=" ++ show (vBeta vBetaU2_REML)
+      putStrLn $ "u=" ++ show (svU vBetaU2_REML)
       putStrLn $ "b=" ++ show vb2_REML
     GLM.report p
                q
@@ -162,20 +161,18 @@ main = do
                vY
                mX
                smZ
-               (SD.toSparseVector $ betaVec vBetaU2_REML)
+               (SD.toSparseVector $ vBeta vBetaU2_REML)
                (SD.toSparseVector vb2_REML)
     let fes_REML = GLM.fixedEffectStatistics fixedEffects
                                              sigma2_REML
                                              cs_REML
-                                             (toSparseBetaU vBetaU2_REML)
+                                             vBetaU2_REML
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
-    epg <- throwEither
-      $ GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_REML
+    epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_REML
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
-    gec <- throwEither
-      $ GLM.effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
+    gec <- GLM.effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
     liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
-    rebl <- throwEither $ GLM.randomEffectsByLabel epg rowClassifier
+    rebl <- GLM.randomEffectsByLabel epg rowClassifier
     liftIO
       $  putStrLn
       $  "Random Effects:\n"
@@ -189,11 +186,11 @@ main = do
                                rowClassifier
                                r
           return (obs, fitted)
-    fitted <- throwEither $ traverse f (FL.fold FL.list frame)
+    fitted <- traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
     when verbose $ do
       cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
-      (pdTest, sigma2Test, svBetaUTest, bTest, _) <- liftIO $ profiledDeviance
+      (pdTest, sigma2Test, svBetaUTest, bTest, _) <- profiledDeviance
         PDVAll
         cholmodFactor
         REML
@@ -202,11 +199,11 @@ main = do
         th2_REML
       liftIO $ do
         putStrLn $ "pdTest=" ++ show pdTest
-        putStrLn $ "betaTest=" ++ show (betaVec $ svBetaUTest)
-        putStrLn $ "uTest=" ++ show (SD.toDenseVector $ uVec svBetaUTest)
+        putStrLn $ "betaTest=" ++ show (vBeta $ svBetaUTest)
+        putStrLn $ "uTest=" ++ show (SD.toDenseVector $ svU svBetaUTest)
         putStrLn $ "bTest=" ++ show (SD.toDenseVector $ bTest)
   case resultEither of
-    Left  err -> putStrLn $ "Error: " ++ (T.unpack err)
+    Left  e -> putStrLn $ "Error: " ++ (show e)
     Right ()  -> putStrLn $ "Success!"
 
 
