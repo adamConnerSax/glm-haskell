@@ -1,4 +1,3 @@
-{-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleContexts    #-}
@@ -6,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE TypeApplications    #-}
 module Numeric.GLM.MixedModel where
 
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
@@ -18,6 +18,7 @@ import qualified Data.IndexedSet               as IS
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
+import qualified Knit.Effect.Logger            as P
 
 --import qualified GLM.Internal.Log              as Log
 import qualified Control.Foldl                 as FL
@@ -44,6 +45,12 @@ import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 
+
+type EffectsC r = (P.Member (Error T.Text) r, P.LogWithPrefixesLE T.Text)
+
+runEffects :: (EffectsC r, P.Member (P.Embed IO) r) => P.Sem r a -> IO a
+runEffects action = action P.& runError & fmap (either (\x -> putStrLn $ T.unpack $ "Error: " <> x) filteredLogEntriesToIO logAll P.& runError 
+                    
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double
 
