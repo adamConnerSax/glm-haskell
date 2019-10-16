@@ -53,18 +53,34 @@ data UseLink = UseCanonical | UseOther LinkFunctionType
 -- y are the observations
 -- mu is the conditional mean of the linear predictor after mapping via the link function
 
+familyWeights :: LA.Vector Double -> ObservationDistribution -> LA.Vector Double
+familyWeights vW (Binomial vN) =
+  let f w n = w * realToFrac n
+  in LA.zipWith f vW vN
+familyWeights vW _ = vW  
+
 deviance
   :: ObservationDistribution
   -> UseLink
   -> LA.Vector Double
   -> LA.Vector Double
+  -> LA.Vector Double
   -> Double
-deviance od ul vY vMu = go od
- where
-  iLink = invLink . linkFunction $ case ul of
-    UseCanonical -> canonicalLink od
-    UseOther lft -> lft
-  vMu' = LA.map iLink vMu
+deviance od ul vW vY vEta = 
+  let
+    weights = familyWeights vW od 
+    iLink = invLink . linkFunction $ case ul of
+      UseCanonical -> canonicalLink od
+      UseOther lft -> lft
+    vMu = LA.map iLink vEta
+    f y mu = case od of
+      Normal -> (y - mu) ^^ 2
+      (Binomial _) -> 2 * (y * log (y / mu) - (1 - y) * log ((1 - y) / (1 - mu)))
+      Poisson ->  2 * (y * log (y / mu) - (y - mu))
+      Gamma -> 2 * ((y - mu) / mu - log (y / mu))
+    g f w y mu = w * f y mu
+  in LA.sumElements $ LA.zipWith3 (g f) weights vY vMu
+{-
   go Normal =
     let f y mu = (y - mu) ^^ 2 in LA.sumElements $ LA.zipWith f vY vMu'
   go (Binomial vN) =
@@ -78,5 +94,5 @@ deviance od ul vY vMu = go od
   go Gamma =
     let f y mu = (y - mu) / mu - log (y / mu)
     in  2 * (LA.sumElements $ LA.zipWith f vY vMu')
-
+-}
 

@@ -149,6 +149,10 @@ mixedModel :: GeneralizedLinearMixedModel b g -> MixedModel b g
 mixedModel (LMM x     ) = x
 mixedModel (GLMM x _ _) = x
 
+generalized :: GeneralizedLinearMixedModel b g -> Bool
+generalized (LMM _) = False
+generalized (GLMM _ _ _) = True
+
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVec = LA.Vector Double
 type LambdaMatrix = SLA.SpMatrix Double
@@ -226,8 +230,10 @@ minimizeDeviance
        , LA.Vector Double
        , CholeskySolutions
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
-minimizeDeviance verbosity dt gmm reCalc@(RandomEffectCalculated smZ mkLambda) th0
-  = do
+minimizeDeviance verbosity dt glmm reCalc@(RandomEffectCalculated smZ mkLambda) th0 =
+  P.wrapPrefix "minimizeDeviance" $ do
+    P.logLE P.Info "Starting..."
+    when (generalized glmm && (dt == REML)) $ P.throw $ OtherGLMError "Can't use REML for generalized models."
     cholmodAnalysis <- cholmodAnalyzeProblem reCalc
     let
       pdv = case verbosity of
@@ -239,17 +245,17 @@ minimizeDeviance verbosity dt gmm reCalc@(RandomEffectCalculated smZ mkLambda) t
                                                     , SLA.SpVector Double
                                                     , CholeskySolutions
                                                     )
-      pd x = profiledDeviance pdv cholmodAnalysis dt gmm reCalc x
+      pd x = profiledDeviance pdv cholmodAnalysis dt glmm reCalc x
       obj x = unsafePerformEffects $ fmap (\(d, _, _, _, _) -> d) $ pd x
       stop                = NL.ObjectiveAbsoluteTolerance 1e-6 NL.:| []
-      MixedModel _ levels = mixedModel gmm
+      MixedModel _ levels = mixedModel glmm
       thetaLB             = thetaLowerBounds levels
       algorithm           = NL.BOBYQA obj [thetaLB] Nothing
       problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
       expThetaLength      = FL.fold
         (FL.premap
-          (\l -> let e = effectsForGroup l in e + (e * (e - 1) `div` 2))
-          FL.sum
+         (\l -> let e = effectsForGroup l in e + (e * (e - 1) `div` 2))
+         FL.sum
         )
         levels
     when (LA.size th0 /= expThetaLength)
@@ -529,11 +535,11 @@ profiledDeviance'
 profiledDeviance' pdv dt gmm re vTh chol vEta svU =
   let MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
       (          RandomEffectCalculated smZ                    mkLambda) = re
-      observationDistribution = case gmm of
-        LMM _       -> GLM.Normal
-        GLMM _ _ od -> od
+      (observationDistribution, vW) = case gmm of
+        LMM _       -> (GLM.Normal, (LA.fromList $ L.replicate (LA.size vY) 1.0)) 
+        GLMM _ vW' od -> (od, vW')
       logLth        = logDetTriangularSM (lTheta chol) 
-      dev2 = GLM.deviance observationDistribution GLM.UseCanonical vY vEta
+      dev2 = GLM.deviance observationDistribution GLM.UseCanonical vW vY vEta
       rTheta2       = dev2 + (SLA.norm2Sq svU)
       n             = LA.size vY
       (_  , p     ) = LA.size mX
@@ -620,14 +626,16 @@ cholmodCholeskySolutionsLMM cholmodFactor mixedModel randomEffCalcs vTh = do
       smZS   = smZ SLA.## lambda
   cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
 
+observationDistribution :: GeneralizedLinearMixedModel b g -> GLM.ObservationDistribution
+observationDistribution (LMM _) = GLM.Normal
+observationDistribution (GLMM _ _ od) = od
+
 linkFunctionType
   :: GeneralizedLinearMixedModel b g -> GLM.UseLink -> GLM.LinkFunctionType
 linkFunctionType glmm ul = case ul of
   GLM.UseOther x   -> x
-  GLM.UseCanonical -> GLM.canonicalLink $ case glmm of
-    LMM _       -> GLM.Normal
-    GLMM _ _ od -> od
-
+  GLM.UseCanonical -> GLM.canonicalLink $ observationDistribution glmm
+  
 spUV
   :: GeneralizedLinearMixedModel b g
   -> GLM.UseLink

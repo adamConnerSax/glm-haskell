@@ -9,6 +9,7 @@ module Main where
 
 import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Report            as GLM
 
@@ -47,7 +48,7 @@ throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
 
 main :: IO ()
 main = do
-
+{-
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel
       fixedEffects :: GLM.FixedEffects ()
@@ -56,7 +57,9 @@ main = do
       getPredictor   = railPredictor
       groupLabels    = railGroupLabels
       effectsByGroup = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
-
+      glmm = LMM
+      useLink = GLM.UseCanonical
+-}
 {-
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
@@ -69,7 +72,10 @@ main = do
     groupLabels    = sleepStudyGroupLabels
     effectsByGroup = M.fromList
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
+    glmm = LMM
+    useLink = GLM.UseCanonical
 -}
+
 {-
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV                                                               (const True)
   let getObservation = realToFrac . F.rgetField @Yield
@@ -82,7 +88,24 @@ main = do
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
+      glmm = LMM
+      useLink = GLM.UseCanonical
 -}
+
+  frame <- defaultLoadToFrame @'[Row, Herd, Incidence, Size, Period, Obs] cbppCSV (const True)
+  let getObservation r = (realToFrac $ F.rgetField @Incidence r)/(realToFrac $ F.rgetField @Size r)
+      fixedEffects :: GLM.FixedEffects CbppPredictor
+      fixedEffects = GLM.allFixedEffects True -- model using CbppPredictor and with intercept
+      groups = IS.fromList [CbppHerd]
+      getPredictor = getCbppPredictor
+      groupLabels = cbppGroupLabels
+      effectsByGroup = M.fromList
+        [ (CbppHerd, IS.fromList [GLM.Intercept]) ]
+      vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
+      vN = LA.fromList $ fmap (F.rgetField @Size) $ FL.fold FL.list frame   
+      glmm mm = GLMM mm vW (GLM.Binomial vN)
+      useLink = GLM.UseCanonical
+      
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
@@ -117,19 +140,19 @@ main = do
     let
       mkLambda = makeLambda fitSpecByGroup
       (_, q)   = SLA.dim smZ
-      gmm =
-        LMM (MixedModel (RegressionModel fixedEffects mX vY) fitSpecByGroup)
+      mm =
+        MixedModel (RegressionModel fixedEffects mX vY) fitSpecByGroup
       randomEffectCalc = RandomEffectCalculated smZ mkLambda
       th0              = setCovarianceVector fitSpecByGroup 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
       putStrLn $ "Z="
       LA.disp 2 $ SD.toDenseMatrix smZ
-    checkProblem (mixedModel gmm) randomEffectCalc
+    checkProblem mm randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
     (th2_ML, pd2_ML, sigma2_ML, vBetaU2_ML, vb2_ML, cs_ML) <- minimizeDeviance
       mdVerbosity
       ML
-      gmm
+      (glmm mm)
       randomEffectCalc
       th0
     liftIO $ do
@@ -138,16 +161,12 @@ main = do
       putStrLn $ "beta=" ++ show (vBeta vBetaU2_ML)
       putStrLn $ "u=" ++ show (svU vBetaU2_ML)
       putStrLn $ "b=" ++ show vb2_ML
-    GLM.report p
-               q
-               fitSpecByGroup
-               vY
-               mX
+    GLM.report (glmm mm)
                smZ
-               (SD.toSparseVector $ vBeta vBetaU2_ML)
+               (vBeta vBetaU2_ML)
                (SD.toSparseVector vb2_ML)
     (th2_REML, pd2_REML, sigma2_REML, vBetaU2_REML, vb2_REML, cs_REML) <-
-      minimizeDeviance mdVerbosity REML gmm randomEffectCalc th0
+      minimizeDeviance mdVerbosity REML (glmm mm) randomEffectCalc th0
     liftIO $ do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
@@ -155,22 +174,18 @@ main = do
       putStrLn $ "beta=" ++ show (vBeta vBetaU2_REML)
       putStrLn $ "u=" ++ show (svU vBetaU2_REML)
       putStrLn $ "b=" ++ show vb2_REML
-    GLM.report p
-               q
-               fitSpecByGroup
-               vY
-               mX
+    GLM.report (glmm mm)
                smZ
-               (SD.toSparseVector $ vBeta vBetaU2_REML)
+               (vBeta vBetaU2_REML)
                (SD.toSparseVector vb2_REML)
-    let fes_REML = GLM.fixedEffectStatistics fixedEffects
+    let fes_REML = GLM.fixedEffectStatistics (glmm mm)
                                              sigma2_REML
                                              cs_REML
                                              vBetaU2_REML
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
     epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_REML
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
-    gec <- GLM.effectCovariancesByGroup effectsByGroup sigma2_REML th2_REML
+    gec <- GLM.effectCovariancesByGroup effectsByGroup (glmm mm) sigma2_REML th2_REML
     liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
     rebl <- GLM.randomEffectsByLabel epg rowClassifier
     liftIO
@@ -179,7 +194,9 @@ main = do
       ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
     let f r = do
           let obs = getObservation r
-          fitted <- GLM.fitted getPredictor
+          fitted <- GLM.fitted (glmm mm)
+                               useLink
+                               getPredictor
                                groupLabels
                                fes_REML
                                epg
@@ -194,7 +211,7 @@ main = do
         PDVAll
         cholmodFactor
         REML
-        gmm
+        (glmm mm)
         randomEffectCalc
         th2_REML
       liftIO $ do

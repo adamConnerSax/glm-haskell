@@ -91,6 +91,22 @@ oatsGroupLabels row group = case group of
 
 --
 
+cbppCSV = "data/cbpp.csv"
+F.tableTypes "CbppRow" "data/cbpp.csv"
+
+data CbppPredictor = CbppPeriod deriving (Eq, Ord, Enum, Bounded, Show, A.Ix)
+type CbppEffect = GLM.WithIntercept CbppPredictor
+
+getCbppPredictor :: CbppRow -> CbppPredictor -> Double
+getCbppPredictor r _ = realToFrac $ F.rgetField @Period r
+
+data CbppGroup = CbppHerd deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+
+cbppGroupLabels :: CbppRow -> CbppGroup -> T.Text
+cbppGroupLabels r _ = T.pack $ show $ F.rgetField @Herd r
+
+--
+
 loadToFrame
   :: forall rs
    . (F.ReadRec rs, FI.RecVec rs, V.RMap rs)

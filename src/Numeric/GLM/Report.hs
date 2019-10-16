@@ -9,7 +9,8 @@ module Numeric.GLM.Report where
 
 import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.Types             as GLM
-import           Numeric.GLM.MixedModel
+import qualified Numeric.GLM.MixedModel        as GLM
+import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Numeric.SparseDenseConversions
                                                as SD
 
@@ -49,23 +50,27 @@ Z is n x q
 zTz is q x q, this is the part that will be sparse.
 -}
 
-eitherToSem :: Effects r => Either T.Text a -> P.Sem r a
-eitherToSem = either (P.throw . OtherGLMError) return
+eitherToSem :: GLM.Effects r => Either T.Text a -> P.Sem r a
+eitherToSem = either (P.throw . GLM.OtherGLMError) return
 
 fixedEffectStatistics
   :: (Ord b, Enum b, Bounded b)
-  => GLM.FixedEffects b
+  => GLM.GeneralizedLinearMixedModel b g --GLM.FixedEffects b
   -> Double
-  -> CholeskySolutions
-  -> BetaU
+  -> GLM.CholeskySolutions
+  -> GLM.BetaU
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics fe sigma2 (CholeskySolutions _ _ mRX) (BetaU vBeta _) =
+fixedEffectStatistics glmm sigma2 (GLM.CholeskySolutions _ _ mRX) (GLM.BetaU vBeta _) =
   let means = vBeta
-      covs  = LA.scale sigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
+      (GLM.MixedModel (GLM.RegressionModel fe _ _) _) = GLM.mixedModel glmm
+      effSigma2 = case GLM.observationDistribution glmm of
+        GLM.Normal -> sigma2
+        _      -> 1
+      covs  = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
   in  GLM.FixedEffectStatistics fe means covs
 
 effectParametersByGroup
-  :: (Ord g, Show g, Show b, Effects r)
+  :: (Ord g, Show g, Show b, GLM.Effects r)
   => GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
   -> LA.Vector Double
@@ -92,13 +97,17 @@ effectParametersByGroup rc ebg vb = do
 
 
 effectCovariancesByGroup
-  :: (Ord g, Show g, Enum b, Bounded b, Show b, Effects r)
+  :: (Ord g, Show g, Enum b, Bounded b, Show b, GLM.Effects r)
   => GLM.EffectsByGroup g b
+  -> GLM.GeneralizedLinearMixedModel b g
   -> Double
   -> LA.Vector Double
   -> P.Sem r (GLM.EffectCovariancesByGroup g b)
-effectCovariancesByGroup ebg sigma2 vTh = do
+effectCovariancesByGroup ebg glmm sigma2 vTh = do
   let
+    effSigma2 = case GLM.observationDistribution glmm of
+        GLM.Normal -> sigma2
+        _      -> 1
     groups = M.keys ebg
     nElements n = n * (n + 1) `div` 2
     groupOffset group = nElements . IS.size <$> GLM.groupEffects ebg group
@@ -112,7 +121,7 @@ effectCovariancesByGroup ebg sigma2 vTh = do
         effects <- GLM.groupEffects ebg group
         let nEffects = IS.size effects
             cm =
-              LA.scale sigma2
+              LA.scale effSigma2
                 $ makeLT nEffects
                 $ VS.take (nElements nEffects)
                 $ VS.drop offset vTh
@@ -121,19 +130,17 @@ effectCovariancesByGroup ebg sigma2 vTh = do
 
 
 report
-  :: (LA.Container LA.Vector Double, EffectsIO r)
-  => Int -- ^ p
-  -> Int -- ^ q
-  -> FitSpecByGroup g
-  -> LA.Vector Double -- ^ y
-  -> LA.Matrix Double -- ^ X
-  -> SLA.SpMatrix Double -- ^ Z
-  -> SLA.SpVector Double -- ^ beta
+  :: (LA.Container LA.Vector Double, GLM.EffectsIO r)
+  => GLM.GeneralizedLinearMixedModel b g
+  -> SLA.SpMatrix Double -- ^ smZ
+  -> GLM.BetaVec -- ^ beta
   -> SLA.SpVector Double -- ^ b
   -> P.Sem r ()
-report p q groupFSM vY mX smZ svBeta svb = do
+report glmm smZ vBeta svb = do
   let
-    vBeta = SD.toDenseVector svBeta
+    GLM.MixedModel (GLM.RegressionModel _ mX vY) groupFSM = GLM.mixedModel glmm
+    (_,p) = LA.size mX
+    (_,q) = SLA.dim smZ
     vb    = SD.toDenseVector svb
     reportStats prefix v = do
       let mean = meanV v
@@ -147,12 +154,12 @@ report p q groupFSM vY mX smZ svBeta svb = do
     meanV v = LA.sumElements v / realToFrac (LA.size v)
     mEps   = meanV vEps --LA.sumElements vEps / realToFrac (LA.size vEps)
     varEps = vEps LA.<.> vEps -- assumes mEps is 0.  Which it should be!!                
-    groupReport l@(GroupFitSpec n b _) b' = do
+    groupReport l@(GLM.GroupFitSpec n b _) b' = do
       putStrLn $ show n ++ " groups"
       when b $ reportStats "Intercept" $ VS.take n b'
       let (numSlopes, bS) = case b of
-            True  -> (effectsForGroup l - 1, VS.drop n b')
-            False -> (effectsForGroup l, b')
+            True  -> (GLM.effectsForGroup l - 1, VS.drop n b')
+            False -> (GLM.effectsForGroup l, b')
       mapM_
         (\s -> reportStats ("Slope " <> (T.pack $ show s))
                            (VS.take n $ VS.drop (n * s) bS)
@@ -170,17 +177,20 @@ report p q groupFSM vY mX smZ svBeta svb = do
 -- fitted values of input data
 -- like "fitted" in lme4
 fitted
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, Effects r)
-  => (q -> b -> Double)
+  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  => GLM.GeneralizedLinearMixedModel b g
+  -> GLM.UseLink
+  -> (q -> b -> Double)
   -> (q -> g -> T.Text)
   -> GLM.FixedEffectStatistics b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
+fitted glmm ul getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
   = do
-    let applyEffect b e q = case b of
+    let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType glmm ul
+        applyEffect b e q = case b of
           GLM.Intercept   -> e
           GLM.Predictor b -> e * getPred q b
         applyEffects ies v q =
@@ -196,12 +206,12 @@ fitted getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier r
           return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) q
         fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
     groupEffects <- eitherToSem $ traverse (applyGroupEffects row) $ M.keys ebg
-    return $ fixedEffects + FL.fold FL.sum groupEffects
+    return $ invLinkF $ fixedEffects + FL.fold FL.sum groupEffects
 
 
 -- Like "ranef" in lme4
 randomEffectsByLabel
-  :: (Ord g, Show g, Show b, Enum b, Bounded b, Effects r)
+  :: (Ord g, Show g, Show b, Enum b, Bounded b, GLM.Effects r)
   => GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
   -> P.Sem r
