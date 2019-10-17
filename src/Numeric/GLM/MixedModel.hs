@@ -50,7 +50,7 @@ import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 
 
-data GLMError = OtherGLMError T.Text deriving (Show, Typeable)
+data GLMError = OtherGLMError T.Text | NonGLMError T.Text deriving (Show, Typeable)
 instance X.Exception GLMError
 
 type Effects r = (P.Member (P.Error GLMError) r, P.LogWithPrefixesLE r)
@@ -58,13 +58,14 @@ type EffectsIO r = ( Effects r
                    , P.Member (P.Embed IO) r)
                    
 
-type GLMEffects a = P.Sem '[P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
+type GLMEffects a = P.Sem '[P.Logger P.LogEntry, P.PrefixLog, P.Error X.SomeException, P.Error GLMError, P.Embed IO, P.Final IO] a
 
 runEffectsIO
   :: GLMEffects a
   -> IO (Either GLMError a)
-runEffectsIO action = action
+runEffectsIO action = P.catch action (\e -> P.throw $ NonGLMError $ T.pack $ X.displayException e)
   & P.filteredLogEntriesToIO P.logAll
+  & P.mapError (NonGLMError . T.pack . X.displayException)
   & P.errorToIOFinal
   & P.embedToFinal
   & P.runFinal
@@ -74,13 +75,11 @@ unsafePerformEffects
   :: GLMEffects a
   -> a
 unsafePerformEffects action = action
-  & P.filteredLogEntriesToIO P.logAll
-  & P.errorToIOFinal
-  & P.embedToFinal
-  & P.runFinal
+  & runEffectsIO
   & fmap (either X.throwIO return)
   & join
   & unsafePerformIO
+
 
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double
