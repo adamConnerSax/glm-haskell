@@ -35,6 +35,7 @@ import qualified Data.Sequence                 as Seq
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 
+import System.IO (hSetBuffering, stdout, BufferMode(..))
 
 verbose = False
 
@@ -48,6 +49,7 @@ throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
 
 main :: IO ()
 main = do
+  hSetBuffering stdout NoBuffering
 {-
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel

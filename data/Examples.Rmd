@@ -7,7 +7,6 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(lme4)
 library(MEMSS)
-library(pbnm)
 ```
 
 ## Rails
@@ -19,3 +18,5 @@ REML_dev <- as.function(SleepStudy_REML)
 thTest <- c (1, 1, 0)
 REML_dev(thTest)
 
+# cbpp
+example(cbpp)

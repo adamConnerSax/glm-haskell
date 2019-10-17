@@ -40,7 +40,7 @@ linkFunction :: LinkFunctionType -> LinkFunction
 linkFunction IdentityLink = LinkFunction id id (const 1)
 
 linkFunction LogisticLink = LinkFunction
-  (\x -> log $ x / (1 - x))
+  (\x -> log $ x / (1.0 - x))
   (\x -> let y = exp x in y / (1 + y))
   (\x -> let y = exp x in y / (1 + y) ^^ 2)
 

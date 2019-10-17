@@ -49,6 +49,7 @@ import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 
+import System.IO (hSetBuffering, stdout, BufferMode(..))
 
 data GLMError = OtherGLMError T.Text | NonGLMError T.Text deriving (Show, Typeable)
 instance X.Exception GLMError
@@ -58,22 +59,17 @@ type EffectsIO r = ( Effects r
                    , P.Member (P.Embed IO) r)
                    
 
-type GLMEffects a = P.Sem '[P.Logger P.LogEntry, P.PrefixLog, P.Error X.SomeException, P.Error GLMError, P.Embed IO, P.Final IO] a
+type GLMEffects a = P.Sem '[P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
 
-runEffectsIO
-  :: GLMEffects a
-  -> IO (Either GLMError a)
-runEffectsIO action = P.catch action (\e -> P.throw $ NonGLMError $ T.pack $ X.displayException e)
+runEffectsIO :: GLMEffects a -> IO (Either GLMError a)
+runEffectsIO action = action 
   & P.filteredLogEntriesToIO P.logAll
-  & P.mapError (NonGLMError . T.pack . X.displayException)
   & P.errorToIOFinal
   & P.embedToFinal
   & P.runFinal
 
 
-unsafePerformEffects
-  :: GLMEffects a
-  -> a
+unsafePerformEffects :: GLMEffects a -> a
 unsafePerformEffects action = action
   & runEffectsIO
   & fmap (either X.throwIO return)
@@ -168,7 +164,7 @@ type UVec = SLA.SpVector Double
 type MuVec = LA.Vector Double
 type EtaVec = LA.Vector Double
 
-data BetaU = BetaU { vBeta :: LA.Vector Double, svU :: SLA.SpVector Double }
+data BetaU = BetaU { vBeta :: LA.Vector Double, svU :: SLA.SpVector Double } deriving (Show)
 {-
 --type DenseBetaU = BetaU LA.Vector
 --type SparseBetaU = BetaU SLA.SpVector
@@ -233,7 +229,9 @@ minimizeDeviance verbosity dt glmm reCalc@(RandomEffectCalculated smZ mkLambda) 
   P.wrapPrefix "minimizeDeviance" $ do
     P.logLE P.Info "Starting..."
     when (generalized glmm && (dt == REML)) $ P.throw $ OtherGLMError "Can't use REML for generalized models."
+    P.logLE P.Diagnostic "Beginning Cholmod analysis of Z matrix structure."
     cholmodAnalysis <- cholmodAnalyzeProblem reCalc
+    P.logLE P.Diagnostic "Finished Cholmod analysis of Z matrix structure."
     let
       pdv = case verbosity of
         MDVNone   -> PDVNone
@@ -465,7 +463,8 @@ profiledDeviance
        , CholeskySolutions
        ) -- ^ (pd, sigma^2, beta, u, b) 
 profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambda) vTh
-  = do
+  = P.wrapPrefix "profiledDeviance" $ do
+    liftIO $ hSetBuffering stdout NoBuffering
     let MixedModel (RegressionModel _ mX vY) _ = mixedModel glmm
         n      = LA.size vY
         (_, p) = LA.size mX
@@ -473,6 +472,7 @@ profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambd
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
 --        smZSt  = SLA.transpose smZS
+    P.logLE P.Diagnostic "Starting. Calling getCholeskySolutions."
     (cs@(CholeskySolutions smLth smRzx mRxx), betaU) <- getCholeskySolutions
       cf
       glmm
@@ -531,10 +531,10 @@ profiledDeviance'
   -> EtaVec
   -> UVec
   -> (Double, Double) -- profiled deviance, deviance + u'u 
-profiledDeviance' pdv dt gmm re vTh chol vEta svU =
-  let MixedModel (RegressionModel _ mX vY) _ = mixedModel gmm
+profiledDeviance' pdv dt glmm re vTh chol vEta svU =
+  let MixedModel (RegressionModel _ mX vY) _ = mixedModel glmm
       (          RandomEffectCalculated smZ                    mkLambda) = re
-      (observationDistribution, vW) = case gmm of
+      (observationDistribution, vW) = case glmm of
         LMM _       -> (GLM.Normal, (LA.fromList $ L.replicate (LA.size vY) 1.0)) 
         GLMM _ vW' od -> (od, vW')
       logLth        = logDetTriangularSM (lTheta chol) 
@@ -590,9 +590,11 @@ normalEquationsRHS
   -> VMatrix
   -> Observations
   -> P.Sem r (SLA.SpMatrix Double, LA.Vector Double)
-normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY = do
+normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY
+  = P.wrapPrefix "normalEquationsRHS" $ do
   let svRhsZ = SLA.transpose smU SLA.#> SD.toSparseVector vY
       vRhsX  = LA.tr mV LA.#> vY
+  P.logLE P.Diagnostic "Calling CHOLMOD.solveSparse to multiply by P"
   smRhsZ <- liftIO $ CH.solveSparse cholmodC
             cholmodF
             CH.CHOLMOD_P
@@ -600,16 +602,19 @@ normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY = do
   return (smRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 
 normalEquationsRHS (NormalEquationsGLMM vW vMu svU) (cholmodC, cholmodF, _) smU mV vY
-  = do
+  = P.wrapPrefix "normalEquationsRHS" $ do
     let vX   = VS.zipWith (*) (VS.map sqrt vW) (vY - vMu)
         svUX = SLA.transpose smU SLA.#> (SD.toSparseVector vX)
+    P.logLE P.Diagnostic "Calling CHOLMOD.solveSparse to multiply by P"    
     smPUX <- liftIO $ CH.solveSparse cholmodC
                             cholmodF
                             CH.CHOLMOD_P
                             (SD.svColumnToSM svUX)
+    P.logLE P.Diagnostic $ "Finished. dim(smPUX)=" <> (T.pack $ show $ SLA.dim smPUX)
     let smRhsZ = smPUX SLA.^-^ (SD.svColumnToSM svU)
-        rhsX    = LA.tr mV LA.#> vX
-    return (smRhsZ, rhsX)
+        vRhsX    = LA.tr mV LA.#> vX
+    P.logLE P.Diagnostic $ "dim(smRhsZ)=" <> (T.pack $ show $ SLA.dim smRhsZ)        
+    return (smRhsZ, vRhsX)
 
 cholmodCholeskySolutionsLMM
   :: EffectsIO r
@@ -671,6 +676,8 @@ weights mX smZS vW lf vEta =
   let vdMudEta = VS.map (GLM.derivInv lf) vEta
   in  VS.zipWith (*) (VS.map sqrt vW) vdMudEta
 
+data ShrinkPD = Shrunk EtaVec UVec | NotShrunk Double EtaVec UVec Double deriving (Show)
+
 getCholeskySolutions
   :: EffectsIO r
   => CholmodFactor
@@ -680,11 +687,14 @@ getCholeskySolutions
   -> CovarianceVec
   -> P.Sem r (CholeskySolutions, BetaU)
 getCholeskySolutions cf (LMM mm) _ reCalc vTh =
+  P.wrapPrefix "getCholeskySolutions" $ do
+  P.logLE P.Diagnostic "Calling cholmodCholeskySolutionsLMM"
   cholmodCholeskySolutionsLMM cf mm reCalc vTh
 
 -- TODO: There is much low hanging fruit here in terms of not re-calcing things
--- 
-getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh = do
+--
+getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh = P.wrapPrefix "getCholeskySolutions" $ do
+  P.logLE P.Diagnostic "Starting (GLMM)..."
   let MixedModel (RegressionModel _ mX vY) levels = mm
       (RandomEffectCalculated smZ mkLambda) = reCalc
       smZS        = smZ SLA.#~# mkLambda vTh
@@ -692,35 +702,48 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh = do
       (_, q)      = SLA.dim smZS
       (_, _, smP) = cf
       vEta0      =  computeEta0 (linkFunctionType glmm ul) vY
-      svU0         = SD.toSparseVector $ LA.fromList $ L.replicate n 0 -- FIXME (maybe 0 is right here??)
+      svU0         = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
       lf = GLM.linkFunction $ linkFunctionType glmm ul
-      deltaCCS vEta svU = do     
+      deltaCCS vEta svU = P.wrapPrefix "deltaCCS" $ do
+        P.logLE P.Diagnostic "Starting..."
         let (smU, mV) = spUV glmm ul reCalc vTh vEta
             vMu       = VS.map (GLM.invLink lf) vEta
             neqs      = NormalEquationsGLMM vW vMu svU
         (chol, dBetaU) <- cholmodCholeskySolutions' cf smU mV neqs mm
+        P.logLE P.Diagnostic "Finished."
         return (dBetaU, chol, smU)
       incS betaU dBetaU x =
         addBetaU betaU (scaleBetaU x dBetaU)
-      refineDBetaU vEta svU' dBetaU chol =
-        let pdF = profiledDeviance' PDVNone ML glmm reCalc vTh chol
+      refineDBetaU vEta svU' dBetaU chol = P.wrapPrefix "refineDBetaU" $ do
+        P.logLE P.Diagnostic $ "Starting \nvEta="
+          <> (T.pack $ show vEta)
+          <> "\nsvU'=" <> (T.pack $ show svU')
+          <> "\ndBetaU=" <> (T.pack $ show dBetaU)
+        let pdF x y = fst $ profiledDeviance' PDVNone ML glmm reCalc vTh chol x y 
             pd0 = pdF vEta svU'            
             checkOne x =              
               let svU'' = svU' SLA.^+^ SLA.scale x (svU dBetaU) --svBetaU' = incS svBetaU svdBetaU x
                   vdEta = denseLinearPredictor mX smZS dBetaU
                   vEta' = vEta + LA.scale x vdEta
-              in  if pdF vEta' svU'' < pd0 then Just (vEta', svU'') else Nothing
-            check triesLeft x = case checkOne x of
-              Nothing -> if n > 1
-                then check (n - 1) (x / 2)
-                else P.throw $ OtherGLMError "Too many step-halvings in getCholeskySolutions."
-              Just y -> return y
-        in  check 10 1.0
-      iterateOne vEta svU' = do
+                  pdNew = pdF vEta' svU''
+              in  if pdNew < pd0 then Shrunk vEta' svU'' else NotShrunk pd0 vEta' svU'' pdNew
+            check triesLeft x = do
+              P.logLE P.Diagnostic $ "check (triesLeft=" <> (T.pack $ show triesLeft) <> "; x=" <> (T.pack $ show x) <> ")..."
+              case checkOne x of
+                ns@(NotShrunk _ _ _ _) ->
+                  if triesLeft > 1
+                  then (P.logLE P.Diagnostic (T.pack $ show ns) >> check (triesLeft - 1) (x / 2))
+                  else P.throw $ OtherGLMError "Too many step-halvings in getCholeskySolutions."
+                Shrunk x y -> return (x,y)
+        check 10 1.0
+      iterateOne vEta svU' = P.wrapPrefix "iterateOne" $ do
+        P.logLE P.Diagnostic "Starting..."
         (dBetaU, chol, smU) <- deltaCCS vEta svU'
         refined <- refineDBetaU vEta svU' dBetaU chol
+        P.logLE P.Diagnostic "Finished."
         return (refined, chol, dBetaU, smU)
-      iterateUntilConverged n convergedOCC vEta svU' = do
+      iterateUntilConverged n convergedOCC vEta svU' = P.wrapPrefix "iterateUntilConverged" $ do
+        P.logLE P.Diagnostic $ "Starting (n=" <> (T.pack $ show n) <> ")..."
         ((vEta', svU''), chol, dBetaU, smU) <- iterateOne vEta svU'
         let occ = orthogonalConvergence
                   glmm
@@ -734,7 +757,7 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh = do
                   svU''
                   (svU dBetaU)  
         if occ < convergedOCC
-          then return (vEta', svU', chol)
+          then (P.logLE P.Diagnostic "Finished." >> return (vEta', svU', chol))
           else
           (if n == 1
             then P.throw (OtherGLMError "Too many iterations in getCholeskySolutions.")
@@ -742,7 +765,11 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh = do
           )
       finish (vEta, svU', chol) =
         (chol, BetaU (betaFromXZStarEtaU mX smZS svU' (SD.toSparseVector vEta)) svU')
-  fmap finish $ iterateUntilConverged 10 0.001 vEta0 svU0
+  P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
+  P.logLE P.Diagnostic $ "vEta0=" <> (T.pack $ show vEta0)
+  res <- fmap finish $ iterateUntilConverged 10 0.001 vEta0 svU0
+  P.logLE P.Diagnostic "Finished."
+  return res
 
 orthogonalConvergence
   :: GeneralizedLinearMixedModel b g
@@ -780,10 +807,13 @@ orthogonalConvergence glmm ul smZS smP smL smU vY vEta svU svdU =
 computeEta0 :: GLM.LinkFunctionType -> Observations -> LA.Vector Double
 computeEta0 lft vY =
   let lF = GLM.link $ GLM.linkFunction lft
+      lowerBound lb x = if x < lb then lb else x
+      upperBound ub x = if x > ub then ub else x
+      bounded lb ub = lowerBound lb . upperBound ub
       f x = case lft of
         GLM.IdentityLink -> x
-        GLM.LogisticLink -> maximum (minimum (0.0001, x), 0.99999)
-        GLM.ExponentialLink -> minimum (0.0001, x)
+        GLM.LogisticLink -> bounded 0.00001 0.99999 x --minimum (maximum (0.0001, x), 0.99999)
+        GLM.ExponentialLink -> lowerBound 0.0001 x
   in VS.map (lF . f) vY
 
 -- NB: eta = X <*> Beta + Z* <*> u
@@ -824,22 +854,27 @@ cholmodCholeskySolutions'
   -> NormalEquations
   -> MixedModel b g
   -> P.Sem r (CholeskySolutions, BetaU)
-cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel = do
+cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel = P.wrapPrefix "cholmodCholeskySolutions'" $ do
   let (cholmodC, cholmodF, smP) = cholmodFactor
       (MixedModel (RegressionModel _ _ vY) _) = mixedModel
       n                         = LA.size vY
       (_, p)                    = LA.size mV
       (_, q)                    = SLA.dim smU
   -- Cholesky factorize to get L_theta *and* update factor for solving with it
+  P.logLE P.Diagnostic "Starting..."
   liftIO $ CH.spMatrixFactorize cholmodC cholmodF CH.SquareSymmetricLower
     $ SLA.filterSM lowerTriangular
     $ xTxPlusI
     $ smU
   -- compute Rzx
+  P.logLE P.Diagnostic "Calling normal equations."
   (smPRhsZ, vRhsX) <- normalEquationsRHS nes cholmodFactor smU mV vY
-  svC <- SLA.toSV <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPRhsZ)
+  P.logLE P.Diagnostic "Calling solveSparse for svC."
+  svC <- SLA.toSV <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPRhsZ)  
   let smUtV = (SLA.transpose smU) SLA.#~# (SD.toSparseMatrix mV)
+  P.logLE P.Diagnostic "Calling solveSparse for smPUtV."
   smPUtV <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smUtV -- PU'V
+  P.logLE P.Diagnostic "Calling solveSparse for smRzx."
   smRzx  <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPUtV -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
   -- compute Rxx
   -- NB: c is defined as Lu + Rzx(Beta) which allows solving the normal equations in pieces
@@ -853,11 +888,15 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel = do
       svBeta          = SD.toSparseVector vBeta
       svRzxBeta       = smRzx SLA.#> svBeta
       smCMinusRzxBeta = SD.svColumnToSM (svC SLA.^-^ svRzxBeta)
+  P.logLE P.Diagnostic "Calling solveSparse for smPu."
   smPu  <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Lt smCMinusRzxBeta
+  P.logLE P.Diagnostic "Calling solveSparse for svu."
   svu   <- SLA.toSV <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Pt $ smPu)
   -- NB: This has to happen after the solves because it unfactors the factor...
   -- NB: It does *not* undo the analysis
+  P.logLE P.Diagnostic "Calling choleskyFactorSM for smLth."
   smLth <- liftIO $ CH.choleskyFactorSM cholmodF cholmodC
+  P.logLE P.Diagnostic "Finished."
   return $ (CholeskySolutions smLth smRzx mRxx, BetaU vBeta svu)
 
 
