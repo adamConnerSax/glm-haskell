@@ -628,23 +628,24 @@ normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY =
 
 normalEquationsRHS (NormalEquationsGLMM vW vMu svU) (cholmodC, cholmodF, _) smU mV vY
   = P.wrapPrefix "normalEquationsRHS" $ do
-    P.logLE P.Diagnostic $ "vW=" <> (T.pack $ show vW)
+{-    P.logLE P.Diagnostic $ "vW=" <> (T.pack $ show vW)
     P.logLE P.Diagnostic $ "svU=" <> (T.pack $ show svU)
     P.logLE P.Diagnostic $ "smU=" <> (T.pack $ show smU)
     P.logLE P.Diagnostic $ "mV=" <> (T.pack $ show mV)
     P.logLE P.Diagnostic $ "vMu=" <> (T.pack $ show vMu)
     P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
+-}
     let vX   = VS.zipWith (*) (VS.map sqrt vW) (vY - vMu)
         svUX = SLA.transpose smU SLA.#> (SD.toSparseVector vX)
     P.logLE P.Diagnostic "Calling CHOLMOD.solveSparse to multiply by P"
     smPUX <- liftIO
       $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svUX)
     P.logLE P.Diagnostic
-      $  "Finished. dim(smPUX)="
+      $  "Finished." -- dim(smPUX)="
       <> (T.pack $ show $ SLA.dim smPUX)
     let smRhsZ = smPUX SLA.^-^ (SD.svColumnToSM svU)
         vRhsX  = LA.tr mV LA.#> vX
-    P.logLE P.Diagnostic $ "dim(smRhsZ)=" <> (T.pack $ show $ SLA.dim smRhsZ)
+--    P.logLE P.Diagnostic $ "dim(smRhsZ)=" <> (T.pack $ show $ SLA.dim smRhsZ)
     return (smRhsZ, vRhsX)
 
 cholmodCholeskySolutionsLMM
@@ -733,8 +734,10 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh =
       n           = LA.size vY
       (_, q)      = SLA.dim smZS
       (_, _, smP) = cf
-      vEta0       = computeEta0 (linkFunctionType glmm ul) vY
+      vEtaExact   = computeEta0 (linkFunctionType glmm ul) vY
       svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
+      vBeta0 = betaFromXZStarEtaU mX smZS svU0 (SD.toSparseVector vEtaExact) -- best fit with no random effects
+      vEta0       = denseLinearPredictor mX smZS (BetaU vBeta0 svU0)
       lf          = GLM.linkFunction $ linkFunctionType glmm ul
       deltaCCS vEta svU = P.wrapPrefix "deltaCCS" $ do
         P.logLE P.Diagnostic "Starting..."
@@ -747,13 +750,15 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh =
         return (dBetaU, chol, smU)
       --incS betaU dBetaU x = addBetaU betaU (scaleBetaU x dBetaU)
       refineDBetaU vEta svU' dBetaU chol = P.wrapPrefix "refineDBetaU" $ do
-        P.logLE P.Diagnostic
-          $  "Starting \nvEta="
+        P.logLE P.Diagnostic $ "Starting..."
+{-        
+          <>  "Starting \nvEta="
           <> (T.pack $ show vEta)
           <> "\nsvU'="
           <> (T.pack $ show svU')
           <> "\ndBetaU="
           <> (T.pack $ show dBetaU)
+-}
         let pdF x y =
               fst <$> profiledDeviance' PDVNone ML glmm reCalc vTh chol x y
         pd0 <- pdF vEta svU'
@@ -777,14 +782,16 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh =
             case co of
               ns@(NotShrunk _ _ _ _) -> if triesLeft > 1
                 then
-                  (  P.logLE P.Diagnostic (T.pack $ show ns)
-                  >> check (triesLeft - 1) (x / 2)
+                  (do
+--P.logLE P.Diagnostic (T.pack $ show ns)
+                    check (triesLeft - 1) (x / 2)
                   )
                 else
                   P.throw $ OtherGLMError
                     "Too many step-halvings in getCholeskySolutions."
-              sh@(Shrunk x y) ->
-                (P.logLE P.Diagnostic (T.pack $ show sh) >> return (x, y))
+              sh@(Shrunk x y) -> do
+                --P.logLE P.Diagnostic (T.pack $ show sh)
+                return (x, y)
         check 10 1.0
       iterateOne vEta svU' = P.wrapPrefix "iterateOne" $ do
         P.logLE P.Diagnostic "Starting..."
@@ -798,37 +805,50 @@ getCholeskySolutions cf glmm@(GLMM mm vW od) ul reCalc vTh =
           <> (T.pack $ show n)
           <> ")..."
         ((vEta', svU''), chol, dBetaU, smU) <- iterateOne vEta svU'
-        let occ = orthogonalConvergence glmm
-                                        ul
-                                        smZS
-                                        smP
-                                        (lTheta chol)
-                                        smU
-                                        vY
-                                        vEta'
-                                        svU''
-                                        (svU dBetaU)
+        occ <- orthogonalConvergence glmm
+                                     ul
+                                     smZS
+                                     smP
+                                     (lTheta chol)
+                                     smU
+                                     vY
+                                     vEta'
+                                     svU''
+                                     (svU dBetaU)
         if occ < convergedOCC
-          then (P.logLE P.Diagnostic "Finished." >> return (vEta', svU', chol))
+          then
+            (do
+              P.logLE P.Diagnostic "Finished."
+              return (vEta', svU', chol)
+            )
           else
             (if n == 1
               then P.throw
                 (OtherGLMError "Too many iterations in getCholeskySolutions.")
-              else iterateUntilConverged (n - 1) convergedOCC vEta' svU'
+              else
+                (do
+                  P.logLE P.Diagnostic
+                    $  "Not converged.  occ="
+                    <> (T.pack $ show occ)
+                    <> "\ndBetaU"
+                    <> (T.pack $ show dBetaU)
+                  iterateUntilConverged (n - 1) convergedOCC vEta' svU'
+                )
             )
       finish (vEta, svU', chol) =
         ( chol
         , BetaU (betaFromXZStarEtaU mX smZS svU' (SD.toSparseVector vEta)) svU'
         )
 
-    P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
-    P.logLE P.Diagnostic $ "vEta0=" <> (T.pack $ show vEta0)
+--    P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
+--    P.logLE P.Diagnostic $ "vEta0=" <> (T.pack $ show vEta0)
     res <- fmap finish $ iterateUntilConverged 10 0.001 vEta0 svU0
     P.logLE P.Diagnostic "Finished."
     return res
 
 orthogonalConvergence
-  :: GeneralizedLinearMixedModel b g
+  :: EffectsIO r
+  => GeneralizedLinearMixedModel b g
   -> GLM.UseLink
   -> ZStarMatrix -- Z*Lambda(theta)
   -> PMatrix
@@ -838,21 +858,24 @@ orthogonalConvergence
   -> EtaVec
   -> UVec
   -> UVec
-  -> Double
+  -> P.Sem r Double
 orthogonalConvergence glmm ul smZS smP smL smU vY vEta svU svdU =
-  let MixedModel (RegressionModel _ mX vY) _ = mixedModel glmm
-      lft = case ul of
-        GLM.UseOther x   -> x
-        GLM.UseCanonical -> GLM.canonicalLink $ case glmm of
-          LMM _       -> GLM.Normal
-          GLMM _ _ od -> od
-      vMu        = VS.map (GLM.invLink $ GLM.linkFunction lft) vEta
-      svYMinusMu = SD.toSparseVector $ vY - vMu
-      x1         = SLA.transpose smL SLA.#> svdU
-      x2         = smP SLA.#> (SLA.transpose smU SLA.#> svYMinusMu) SLA.^-^ svU
-      q'         = realToFrac $ snd $ SLA.dim smZS
-      n'         = realToFrac $ LA.size vY
-  in  (SLA.norm2 x1 / sqrt q') / (SLA.norm2 x2 / sqrt (n' - q'))
+  P.wrapPrefix "orthogonalConvergence" $ do
+    let MixedModel (RegressionModel _ mX vY) _ = mixedModel glmm
+        lft        = linkFunctionType glmm ul
+        vMu        = VS.map (GLM.invLink $ GLM.linkFunction lft) vEta
+        svYMinusMu = SD.toSparseVector $ (vY - vMu)
+        x1         = SLA.transpose smL SLA.#> svdU
+        x2         = smL SLA.#> x1
+        x3 = smP SLA.#> (SLA.transpose smU SLA.#> svYMinusMu) SLA.^-^ svU
+        q'         = realToFrac $ snd $ SLA.dim smZS
+        n'         = realToFrac $ LA.size vY
+    P.logLE P.Diagnostic $ "dU=" <> (T.pack $ show svdU)
+    P.logLE P.Diagnostic $ "L'dU=" <> (T.pack $ show x1)
+    P.logLE P.Diagnostic $ "LL'dU=" <> (T.pack $ show x2)
+    P.logLE P.Diagnostic $ "(y - mu)" <> (T.pack $ show svYMinusMu)
+    P.logLE P.Diagnostic $ "P(smU')*(y - mu) - u=" <> (T.pack $ show x3)
+    return $ (SLA.norm2 x1 / sqrt q') / (SLA.norm2 x2 / sqrt (n' - q'))
 
 -- compute a starting point for the linear predictor.  Just assume the given observations but fix any out of bounds
 -- That is, assume mu = y* and then eta = g (mu) = g (y*) where
@@ -923,22 +946,23 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel =
       $ xTxPlusI
       $ smU
     -- compute Rzx
-    P.logLE P.Diagnostic "Calling normal equations."
+--    P.logLE P.Diagnostic "Calling normal equations."
     (smPRhsZ, vRhsX) <- normalEquationsRHS nes cholmodFactor smU mV vY
-    P.logLE P.Diagnostic
+  {-  P.logLE P.Diagnostic
       $  "Normal Equation RHS:\nsmPRhsZ="
       <> (T.pack $ show smPRhsZ)
       <> "\nvRhsX="
       <> (T.pack $ show vRhsX)
     P.logLE P.Diagnostic "Calling solveSparse for svC."
-    svC <-
+-}
+    svC              <-
       SLA.toSV
         <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPRhsZ)
     let smUtV = (SLA.transpose smU) SLA.#~# (SD.toSparseMatrix mV)
-    P.logLE P.Diagnostic "Calling solveSparse for smPUtV."
+--    P.logLE P.Diagnostic "Calling solveSparse for smPUtV."
     smPUtV <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smUtV -- PU'V
-    P.logLE P.Diagnostic "Calling solveSparse for smRzx."
-    smRzx <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPUtV -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
+--    P.logLE P.Diagnostic "Calling solveSparse for smRzx."
+    smRzx  <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPUtV -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
     -- compute Rxx
     -- NB: c is defined as Lu + Rzx(Beta) which allows solving the normal equations in pieces
     let vTvMinusRzxTRzx =
@@ -951,16 +975,16 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel =
         svBeta          = SD.toSparseVector vBeta
         svRzxBeta       = smRzx SLA.#> svBeta
         smCMinusRzxBeta = SD.svColumnToSM (svC SLA.^-^ svRzxBeta)
-    P.logLE P.Diagnostic "Calling solveSparse for smPu."
+--    P.logLE P.Diagnostic "Calling solveSparse for smPu."
     smPu <- liftIO
       $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Lt smCMinusRzxBeta
-    P.logLE P.Diagnostic "Calling solveSparse for svu."
+--    P.logLE P.Diagnostic "Calling solveSparse for svu."
     svu <-
       SLA.toSV
         <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Pt $ smPu)
     -- NB: This has to happen after the solves because it unfactors the factor...
     -- NB: It does *not* undo the analysis
-    P.logLE P.Diagnostic "Calling choleskyFactorSM for smLth."
+--    P.logLE P.Diagnostic "Calling choleskyFactorSM for smLth."
     smLth <- liftIO $ CH.choleskyFactorSM cholmodF cholmodC
     P.logLE P.Diagnostic "Finished."
     return $ (CholeskySolutions smLth smRzx mRxx, BetaU vBeta svu)
