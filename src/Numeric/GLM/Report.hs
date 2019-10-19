@@ -60,14 +60,14 @@ fixedEffectStatistics
   -> GLM.CholeskySolutions
   -> GLM.BetaU
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics glmm sigma2 (GLM.CholeskySolutions _ _ mRX) (GLM.BetaU vBeta _) =
-  let means = vBeta
-      (GLM.MixedModel (GLM.RegressionModel fe _ _) _) = GLM.mixedModel glmm
-      effSigma2 = case GLM.observationDistribution glmm of
-        GLM.Normal -> sigma2
-        _      -> 1
-      covs  = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
-  in  GLM.FixedEffectStatistics fe means covs
+fixedEffectStatistics glmm sigma2 (GLM.CholeskySolutions _ _ mRX) (GLM.BetaU vBeta _)
+  = let means     = vBeta
+        (GLM.MixedModel (GLM.RegressionModel fe _ _) _) = GLM.mixedModel glmm
+        effSigma2 = case GLM.observationDistribution glmm of
+          GLM.Normal -> sigma2
+          _          -> 1
+        covs = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
+    in  GLM.FixedEffectStatistics fe means covs
 
 effectParametersByGroup
   :: (Ord g, Show g, Show b, GLM.Effects r)
@@ -106,8 +106,8 @@ effectCovariancesByGroup
 effectCovariancesByGroup ebg glmm sigma2 vTh = do
   let
     effSigma2 = case GLM.observationDistribution glmm of
-        GLM.Normal -> sigma2
-        _      -> 1
+      GLM.Normal -> sigma2
+      _          -> 1
     groups = M.keys ebg
     nElements n = n * (n + 1) `div` 2
     groupOffset group = nElements . IS.size <$> GLM.groupEffects ebg group
@@ -139,9 +139,9 @@ report
 report glmm smZ vBeta svb = do
   let
     GLM.MixedModel (GLM.RegressionModel _ mX vY) groupFSM = GLM.mixedModel glmm
-    (_,p) = LA.size mX
-    (_,q) = SLA.dim smZ
-    vb    = SD.toDenseVector svb
+    (_, p) = LA.size mX
+    (_, q) = SLA.dim smZ
+    vb     = SD.toDenseVector svb
     reportStats prefix v = do
       let mean = meanV v
           var =
@@ -179,7 +179,6 @@ report glmm smZ vBeta svb = do
 fitted
   :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
   => GLM.GeneralizedLinearMixedModel b g
-  -> GLM.UseLink
   -> (q -> b -> Double)
   -> (q -> g -> T.Text)
   -> GLM.FixedEffectStatistics b
@@ -187,24 +186,24 @@ fitted
   -> GLM.RowClassifier g
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted glmm ul getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
+fitted glmm getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
   = do
-    let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType glmm ul
-        applyEffect b e q = case b of
-          GLM.Intercept   -> e
-          GLM.Predictor b -> e * getPred q b
-        applyEffects ies v q =
-          FL.fold FL.sum
-            $ fmap
-                (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) q
-                )
-            $ IS.toIndexedList ies
-        groups = M.keys ebg
-        applyGroupEffects q group = do
-          labelIndex <- GLM.labelIndex rowClassifier group (getLabel q group)
-          (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
-          return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) q
-        fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
+    let
+      invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType glmm
+      applyEffect b e q = case b of
+        GLM.Intercept   -> e
+        GLM.Predictor b -> e * getPred q b
+      applyEffects ies v q =
+        FL.fold FL.sum
+          $ fmap
+              (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) q)
+          $ IS.toIndexedList ies
+      groups = M.keys ebg
+      applyGroupEffects q group = do
+        labelIndex <- GLM.labelIndex rowClassifier group (getLabel q group)
+        (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
+        return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) q
+      fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
     groupEffects <- eitherToSem $ traverse (applyGroupEffects row) $ M.keys ebg
     return $ invLinkF $ fixedEffects + FL.fold FL.sum groupEffects
 
@@ -214,7 +213,8 @@ randomEffectsByLabel
   :: (Ord g, Show g, Show b, Enum b, Bounded b, GLM.Effects r)
   => GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
-  -> P.Sem r
+  -> P.Sem
+       r
        (M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)]))
 randomEffectsByLabel ebg rowClassifier = do
   let byLabel group (GLM.EffectParameters ies mEP) = do

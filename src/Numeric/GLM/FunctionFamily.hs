@@ -47,7 +47,7 @@ linkFunction LogisticLink = LinkFunction
 linkFunction ExponentialLink = LinkFunction log exp exp
 
 
-data UseLink = UseCanonical | UseOther LinkFunctionType
+data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
 
 -- notation here:
 -- y are the observations
