@@ -683,8 +683,8 @@ normalEquationsRHS (NormalEquationsGLMM vW vMu svU) (cholmodC, cholmodF, _) smU 
     let vX   = VS.zipWith (*) (VS.map sqrt vW) (vY - vMu)
         svUX = SLA.transpose smU SLA.#> (SD.toSparseVector vX)
     P.logLE P.Diagnostic "Calling CHOLMOD.solveSparse to multiply by P"
-    smPUX <- liftIO
-      $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svUX)
+    let smUX = SD.svColumnToSM svUX
+    smPUX <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smUX
     P.logLE P.Diagnostic
       $  "Finished." -- dim(smPUX)="
       <> (T.pack $ show $ SLA.dim smPUX)

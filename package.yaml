@@ -86,7 +86,16 @@ tests:
       - mtl
       - pipes
       - vinyl
-
+  GLMM-test:
+    main: GLMM-test.hs
+    source-dirs: test/glm
+    ghc-options: -O -Wall
+    dependencies:
+      - glm-haskell
+      - Frames
+      - mtl
+      - pipes
+      - vinyl
   CHOLMOD-test:
     extra-libraries:
       - cholmod
