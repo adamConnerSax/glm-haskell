@@ -54,8 +54,10 @@ main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
   let lmmControls = defaultLMMControls
-  let glmmControls =
-        GLMMControls lmmControls GLM.UseCanonical 10 (ConvergeSimple 0.05 20)
+  let glmmControls = GLMMControls lmmControls
+                                  GLM.UseCanonical
+                                  10
+                                  (ConvergeOrthogonal 0.05 20)
 
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel

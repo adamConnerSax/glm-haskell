@@ -815,7 +815,7 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
                 vdEta = denseLinearPredictor mX smZS dBetaU
                 vEta' = vEta + LA.scale x vdEta
             pdNew <- pdF vEta' svU''
-            return $ if pdNew < pd0
+            return $ if pdNew <= pd0
               then Shrunk vEta' svU''
               else NotShrunk pd0 vEta' svU'' pdNew
           check triesLeft x = do
