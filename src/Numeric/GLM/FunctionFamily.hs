@@ -40,9 +40,9 @@ linkFunction :: LinkFunctionType -> LinkFunction
 linkFunction IdentityLink = LinkFunction id id (const 1)
 
 linkFunction LogisticLink = LinkFunction
-  (\x -> log $ x / (1 - x))
+  (\x -> log (x / (1 - x)))
   (\x -> let y = exp x in y / (1 + y))
-  (\x -> let y = exp x in y / (1 + y) ^^ 2)
+  (\x -> let y = exp x in y / ((1 + y) ** 2))
 
 linkFunction ExponentialLink = LinkFunction log exp exp
 
@@ -74,16 +74,17 @@ deviance od ul vW vY vEta
         UseOther lft -> lft
       vMu = LA.map iLink vEta
       f y mu = case od of
-        Normal       -> (y - mu) ^^ 2
+        Normal       -> (y - mu) ** 2
         (Binomial _) -> if y < eps
           then -2 * log (1 - mu) -- y = 0
           else if (1 - y) < eps
             then -2 * log mu  -- y = 1
-            else -2 * (y * log mu + (1 - y) * log (1 - mu)) -- -(y * log (y / mu) - (1 - y) * log ((1 - y) / (1 - mu)))
+            else 2 * (y * log (y / mu) + (1 - y) * log ((1 - y) / (1 - mu)))
+--            else -2 * (y * log mu + (1 - y) * log (1 - mu)) -- 
         Poisson ->
           if y > eps then 2 * (y * log (y / mu) - (y - mu)) else 2 * mu
         Gamma -> 2 * ((y - mu) / mu - log (y / mu))
-      g f w y mu = w * f y mu
+      g h w y mu = w * h y mu
     in
       LA.sumElements $ LA.zipWith3 (g f) weights vY vMu
 {-
