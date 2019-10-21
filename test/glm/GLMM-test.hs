@@ -53,7 +53,7 @@ throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
-  let lmmControls = defaultLMMControls
+  let lmmControls = LMMControls LMM_NELDERMEAD --defaultLMMControls
   let glmmControls =
         GLMMControls lmmControls GLM.UseCanonical 10 (ConvergeSimple 0.05 20)
 
@@ -82,12 +82,14 @@ main = do
     groupLabels    = sleepStudyGroupLabels
     effectsByGroup = M.fromList
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
-    glmm x = LMM x lmmControls
-    useLink = GLM.UseCanonical
--}
+    asLMM x = LMM x lmmControls
+    vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
+    asGLMM x = GLMM x vW GLM.Normal glmmControls
 
+-}
 {-
-  frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV                                                               (const True)
+  frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
+                                                               (const True)
   let getObservation = realToFrac . F.rgetField @Yield
       fixedEffects :: GLM.FixedEffects OatsPredictor
       fixedEffects   = GLM.allFixedEffects True -- model using OatsPredictors and with intercept
@@ -98,8 +100,9 @@ main = do
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
-      glmm x = LMM x lmmControls
-      useLink = GLM.UseCanonical
+      asLMM x = LMM x lmmControls
+      vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
+      asGLMM x = GLMM x vW GLM.Normal glmmControls
 -}
 
   frame <- defaultLoadToFrame @'[Row, Herd, Incidence, Size, Period, Obs]
@@ -109,7 +112,7 @@ main = do
         (realToFrac $ F.rgetField @Incidence r)
           / (realToFrac $ F.rgetField @Size r)
       fixedEffects :: GLM.FixedEffects CbppPredictor
-      fixedEffects   = GLM.allFixedEffects True -- model using CbppPredictor and with intercept
+      fixedEffects   = GLM.InterceptOnly --GLM.allFixedEffects True -- model using CbppPredictor and with intercept
       groups         = IS.fromList [CbppHerd]
       getPredictor   = getCbppPredictor
       groupLabels    = cbppGroupLabels
@@ -167,6 +170,41 @@ main = do
     liftIO $ putStrLn $ "GLMM"
     (th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM) <-
       minimizeDeviance mdVerbosity ML (asGLMM mm) randomEffectCalc th0
+    liftIO $ do
+      putStrLn $ "deviance=" ++ show pd2_GLMM
+      putStrLn $ "beta=" ++ show (vBeta vBetaU2_GLMM)
+      putStrLn $ "u=" ++ show (svU vBetaU2_GLMM)
+      putStrLn $ "b=" ++ show vb2_GLMM
+    GLM.report (asGLMM mm) smZ (vBeta vBetaU2_GLMM) (SD.toSparseVector vb2_GLMM)
+    let fes_GLMM = GLM.fixedEffectStatistics (asGLMM mm)
+                                             sigma2_GLMM
+                                             cs_GLMM
+                                             vBetaU2_GLMM
+    liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_GLMM
+    epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_GLMM
+    liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
+    gec <- GLM.effectCovariancesByGroup effectsByGroup
+                                        (asGLMM mm)
+                                        sigma2_GLMM
+                                        th2_GLMM
+    liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
+    rebl <- GLM.randomEffectsByLabel epg rowClassifier
+    liftIO
+      $  putStrLn
+      $  "Random Effects:\n"
+      ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
+    let f r = do
+          let obs = getObservation r
+          fitted <- GLM.fitted (asGLMM mm)
+                               getPredictor
+                               groupLabels
+                               fes_GLMM
+                               epg
+                               rowClassifier
+                               r
+          return (obs, fitted)
+    fitted <- traverse f (FL.fold FL.list frame)
+    liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
     liftIO $ putStrLn "Done"
 
 {-

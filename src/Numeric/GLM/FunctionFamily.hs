@@ -44,6 +44,7 @@ linkFunction LogisticLink = LinkFunction
   (\x -> let y = exp x in y / (1 + y))
   (\x -> let y = exp x in y / ((1 + y) ** 2))
 
+
 linkFunction ExponentialLink = LinkFunction log exp exp
 
 
@@ -57,6 +58,14 @@ familyWeights :: ObservationDistribution -> LA.Vector Double -> LA.Vector Double
 familyWeights (Binomial vN) vW =
   let f w n = w * realToFrac n in LA.zipWith f vW vN
 familyWeights _ vW = vW
+
+varianceScaledWeights
+  :: ObservationDistribution
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> LA.Vector Double
+varianceScaledWeights od vW vMu =
+  let vVar = variance od vMu in LA.zipWith (/) (familyWeights od vW) vVar
 
 deviance
   :: ObservationDistribution
@@ -87,19 +96,14 @@ deviance od ul vW vY vEta
       g h w y mu = w * h y mu
     in
       LA.sumElements $ LA.zipWith3 (g f) weights vY vMu
-{-
-  go Normal =
-    let f y mu = (y - mu) ^^ 2 in LA.sumElements $ LA.zipWith f vY vMu'
-  go (Binomial vN) =
-    let f n y mu =
-          let m = realToFrac n
-          in  m * (y * log (y / mu) - (1 - y) * log ((1 - y) / (1 - mu)))
-    in  2 * (LA.sumElements $ LA.zipWith3 f vN vY vMu')
-  go Poisson =
-    let f y mu = y * log (y / mu) - (y - mu)
-    in  2 * (LA.sumElements $ LA.zipWith f vY vMu')
-  go Gamma =
-    let f y mu = (y - mu) / mu - log (y / mu)
-    in  2 * (LA.sumElements $ LA.zipWith f vY vMu')
--}
 
+variance :: ObservationDistribution -> LA.Vector Double -> LA.Vector Double
+variance od =
+  let eps = 1e-12
+      f x = case od of
+        Normal       -> 1 -- this is wrong so maybe this is a scaled variance for distributions with an overall scale??
+        (Binomial _) -> x * (1 - x)
+        Poisson      -> x
+        Gamma        -> x * x
+      g x = if x > eps then f x else eps
+  in  LA.map g

@@ -40,7 +40,7 @@ import           System.IO                      ( hSetBuffering
                                                 , BufferMode(..)
                                                 )
 
-verbose = False
+verbose = True
 
 throwEither :: (P.Member (P.Error GLMError) r) => Either GLMError a -> P.Sem r a
 throwEither x = case x of
@@ -66,7 +66,7 @@ main = do
       glmm x = LMM x lmmControls
       useLink = GLM.UseCanonical
 -}
-{-
+
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
   let
@@ -80,9 +80,9 @@ main = do
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
     glmm x = LMM x lmmControls
     useLink = GLM.UseCanonical
--}
 
 
+{-
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
                                                                (const True)
   let getObservation = realToFrac . F.rgetField @Yield
@@ -97,7 +97,7 @@ main = do
         ]
       glmm x = LMM x lmmControls
       useLink = GLM.UseCanonical
-
+-}
 
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold

@@ -595,7 +595,7 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
         LMM _ _ -> (GLM.Normal, (LA.fromList $ L.replicate (LA.size vY) 1.0))
         GLMM _ vW' od _ -> (od, vW')
       logLth        = logDetTriangularSM (lTheta chol)
-      dev2 = GLM.deviance observationDistribution GLM.UseCanonical vW vY vEta
+      dev2 = GLM.deviance observationDistribution (useLink glmm) vW vY vEta
       rTheta2       = dev2 + (SLA.norm2Sq svU)
       n             = LA.size vY
       (_  , p     ) = LA.size mX
@@ -651,37 +651,31 @@ normalEquationsRHS
   -> UMatrix
   -> VMatrix
   -> Observations
-  -> P.Sem r (SLA.SpMatrix Double, LA.Vector Double)
+  -> P.Sem r (SLA.SpVector Double, LA.Vector Double)
 normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY =
   P.wrapPrefix "normalEquationsRHS" $ do
     let svRhsZ = SLA.transpose smU SLA.#> SD.toSparseVector vY
         vRhsX  = LA.tr mV LA.#> vY
-    P.logLE P.Diagnostic "Calling CHOLMOD.solveSparse to multiply by P"
-    smRhsZ <- liftIO
-      $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svRhsZ)
-    return (smRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
+--    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svRhsZ, vRhsX))
+    return (svRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 
-normalEquationsRHS (NormalEquationsGLMM vW vMu svU) (cholmodC, cholmodF, _) smU mV vY
+normalEquationsRHS (NormalEquationsGLMM vVarW vMu svU) (cholmodC, cholmodF, _) smU mV vY
   = P.wrapPrefix "normalEquationsRHS" $ do
-{-    P.logLE P.Diagnostic $ "vW=" <> (T.pack $ show vW)
+{-  
+    P.logLE P.Diagnostic $ "vW=" <> (T.pack $ show vW)
+    
     P.logLE P.Diagnostic $ "svU=" <> (T.pack $ show svU)
     P.logLE P.Diagnostic $ "smU=" <> (T.pack $ show smU)
     P.logLE P.Diagnostic $ "mV=" <> (T.pack $ show mV)
     P.logLE P.Diagnostic $ "vMu=" <> (T.pack $ show vMu)
     P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
 -}
-    let vX   = VS.zipWith (*) (VS.map sqrt vW) (vY - vMu)
+    let vX   = VS.zipWith (*) (LA.cmap sqrt vVarW) (vY - vMu)
         svUX = SLA.transpose smU SLA.#> (SD.toSparseVector vX)
-    P.logLE P.Diagnostic "Calling CHOLMOD.solveSparse to multiply by P"
-    let smUX = SD.svColumnToSM svUX
-    smPUX <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smUX
-    P.logLE P.Diagnostic
-      $  "Finished." -- dim(smPUX)="
-      <> (T.pack $ show $ SLA.dim smPUX)
-    let smRhsZ = smPUX SLA.^-^ (SD.svColumnToSM svU)
+    let svRhsZ = svUX SLA.^-^ svU
         vRhsX  = LA.tr mV LA.#> vX
---    P.logLE P.Diagnostic $ "dim(smRhsZ)=" <> (T.pack $ show $ SLA.dim smRhsZ)
-    return (smRhsZ, vRhsX)
+--    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svRhsZ, vRhsX))
+    return (svRhsZ, vRhsX)
 
 cholmodCholeskySolutionsLMM
   :: EffectsIO r
@@ -734,10 +728,13 @@ weights
   :: GeneralizedLinearMixedModel b g -> WMatrix -> LinearPredictor -> WMatrix
 weights glmm vW vEta =
   let lf       = GLM.linkFunction $ linkFunctionType glmm
+      vMu      = VS.map (GLM.link lf) vEta
       vdMudEta = VS.map (GLM.derivInv lf) vEta
   in  VS.zipWith
         (*)
-        (VS.map sqrt $ GLM.familyWeights (observationDistribution glmm) vW)
+        ( VS.map sqrt
+        $ GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
+        )
         vdMudEta
 
 data ShrinkPD = Shrunk EtaVec UVec | NotShrunk Double EtaVec UVec Double deriving (Show)
@@ -778,10 +775,12 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
       lf          = GLM.linkFunction $ linkFunctionType glmm
       deltaCCS vEtaDelta svUDelta = P.wrapPrefix "deltaCCS" $ do
         P.logLE P.Diagnostic "Starting..."
-        let (smU, mV) = spUV glmm reCalc vTh vEtaDelta
-            vMu       = VS.map (GLM.invLink lf) vEtaDelta
-            vW'       = weights glmm vW vEtaDelta
-            neqs      = NormalEquationsGLMM vW' vMu svUDelta
+        let
+          (smU, mV) = spUV glmm reCalc vTh vEtaDelta
+          vMu       = VS.map (GLM.invLink lf) vEtaDelta
+          vVarW =
+            GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
+          neqs = NormalEquationsGLMM vVarW vMu svUDelta
         (chol, dBetaU) <- cholmodCholeskySolutions' cf smU mV neqs mm
         P.logLE P.Diagnostic "Finished."
         return (dBetaU, chol, smU)
@@ -1003,7 +1002,7 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel =
       $ smU
     -- compute Rzx
 --    P.logLE P.Diagnostic "Calling normal equations."
-    (smPRhsZ, vRhsX) <- normalEquationsRHS nes cholmodFactor smU mV vY
+    (svRhsZ, vRhsX) <- normalEquationsRHS nes cholmodFactor smU mV vY
   {-  P.logLE P.Diagnostic
       $  "Normal Equation RHS:\nsmPRhsZ="
       <> (T.pack $ show smPRhsZ)
@@ -1011,7 +1010,9 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel =
       <> (T.pack $ show vRhsX)
     P.logLE P.Diagnostic "Calling solveSparse for svC."
 -}
-    svC              <-
+    smPRhsZ         <- liftIO
+      $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svRhsZ)
+    svC <-
       SLA.toSV
         <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPRhsZ)
     let smUtV = (SLA.transpose smU) SLA.#~# (SD.toSparseMatrix mV)
