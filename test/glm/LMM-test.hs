@@ -97,7 +97,7 @@ main = do
         ]
       glmm x = LMM x lmmControls
       useLink = GLM.UseCanonical
--}  
+-}
 
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
@@ -146,10 +146,13 @@ main = do
       putStrLn $ "REML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_REML
       putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
-      putStrLn $ "beta=" ++ show (vBeta vBetaU2_REML)
-      putStrLn $ "u=" ++ show (svU vBetaU2_REML)
+      putStrLn $ "beta=" ++ show (bu_vBeta vBetaU2_REML)
+      putStrLn $ "u=" ++ show (bu_svU vBetaU2_REML)
       putStrLn $ "b=" ++ show vb2_REML
-    GLM.report (glmm mm) smZ (vBeta vBetaU2_REML) (SD.toSparseVector vb2_REML)
+    GLM.report (glmm mm)
+               smZ
+               (bu_vBeta vBetaU2_REML)
+               (SD.toSparseVector vb2_REML)
 
     (th2_ML, pd2_ML, sigma2_ML, vBetaU2_ML, vb2_ML, cs_ML) <- minimizeDeviance
       mdVerbosity
@@ -160,14 +163,13 @@ main = do
     liftIO $ do
       putStrLn $ "ML Via method 2"
       putStrLn $ "deviance=" ++ show pd2_ML
-      putStrLn $ "beta=" ++ show (vBeta vBetaU2_ML)
-      putStrLn $ "u=" ++ show (svU vBetaU2_ML)
+      putStrLn $ "beta=" ++ show (bu_vBeta vBetaU2_ML)
+      putStrLn $ "u=" ++ show (bu_svU vBetaU2_ML)
       putStrLn $ "b=" ++ show vb2_ML
 
-    GLM.report (glmm mm) smZ (vBeta vBetaU2_ML) (SD.toSparseVector vb2_ML)
+    GLM.report (glmm mm) smZ (bu_vBeta vBetaU2_ML) (SD.toSparseVector vb2_ML)
 
-    let fes_ML =
-          GLM.fixedEffectStatistics (glmm mm) sigma2_ML cs_ML vBetaU2_ML
+    let fes_ML = GLM.fixedEffectStatistics (glmm mm) sigma2_ML cs_ML vBetaU2_ML
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_ML
     epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_ML
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
@@ -205,8 +207,8 @@ main = do
         th2_REML
       liftIO $ do
         putStrLn $ "pdTest=" ++ show pdTest
-        putStrLn $ "betaTest=" ++ show (vBeta $ svBetaUTest)
-        putStrLn $ "uTest=" ++ show (SD.toDenseVector $ svU svBetaUTest)
+        putStrLn $ "betaTest=" ++ show (bu_vBeta svBetaUTest)
+        putStrLn $ "uTest=" ++ show (SD.toDenseVector $ bu_svU svBetaUTest)
         putStrLn $ "bTest=" ++ show (SD.toDenseVector $ bTest)
   case resultEither of
     Left  e  -> putStrLn $ "Error: " ++ (show e)

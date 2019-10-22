@@ -171,10 +171,13 @@ main = do
       minimizeDeviance mdVerbosity ML (asGLMM mm) randomEffectCalc th0
     liftIO $ do
       putStrLn $ "deviance=" ++ show pd2_GLMM
-      putStrLn $ "beta=" ++ show (vBeta vBetaU2_GLMM)
-      putStrLn $ "u=" ++ show (svU vBetaU2_GLMM)
+      putStrLn $ "beta=" ++ show (bu_vBeta vBetaU2_GLMM)
+      putStrLn $ "u=" ++ show (bu_svU vBetaU2_GLMM)
       putStrLn $ "b=" ++ show vb2_GLMM
-    GLM.report (asGLMM mm) smZ (vBeta vBetaU2_GLMM) (SD.toSparseVector vb2_GLMM)
+    GLM.report (asGLMM mm)
+               smZ
+               (bu_vBeta vBetaU2_GLMM)
+               (SD.toSparseVector vb2_GLMM)
     let fes_GLMM = GLM.fixedEffectStatistics (asGLMM mm)
                                              sigma2_GLMM
                                              cs_GLMM
