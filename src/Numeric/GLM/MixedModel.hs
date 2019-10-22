@@ -773,6 +773,7 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
       vBeta0 = betaFromXZStarEtaU mX smZS svU0 (SD.toSparseVector vEtaExact) -- best fit with no random effects
       vEta0       = denseLinearPredictor mX smZS (BetaU vBeta0 svU0)
       lf          = GLM.linkFunction $ linkFunctionType glmm
+{-      
       deltaCCS vEtaDelta svUDelta = P.wrapPrefix "deltaCCS" $ do
         P.logLE P.Diagnostic "Starting..."
         let
@@ -785,6 +786,7 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
         P.logLE P.Diagnostic "Finished."
         return (dBetaU, chol, smU)
       --incS betaU dBetaU x = addBetaU betaU (scaleBetaU x dBetaU)
+-}
       refineDBetaU vEtaRefine svURefine dBetaU chol =
         P.wrapPrefix "refineDBetaU" $ do
           P.logLE P.Diagnostic $ "Starting..."
@@ -832,7 +834,7 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
           check maxHalvings 1.0
       iterateOne vEtaIter svUIter = P.wrapPrefix "iterateOne" $ do
         P.logLE P.Diagnostic "Starting..."
-        (dBetaU, chol, smU) <- deltaCCS vEtaIter svUIter
+        (dBetaU, chol, smU) <- deltaCCS cf glmm reCalc vEtaIter svUIter vTh
         P.logLE P.Diagnostic $ "d" <> (T.pack $ show dBetaU)
         refined <- refineDBetaU vEtaIter svUIter dBetaU chol
         P.logLE P.Diagnostic "Finished."
@@ -889,6 +891,28 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
       svU0
     P.logLE P.Diagnostic "Finished."
     return res
+
+deltaCCS
+  :: EffectsIO r
+  => CholmodFactor
+  -> GeneralizedLinearMixedModel b g
+  -> RandomEffectCalculated
+  -> EtaVec
+  -> UVec
+  -> CovarianceVec
+  -> P.Sem r (BetaU, CholeskySolutions, SLA.SpMatrix Double)
+deltaCCS cf glmm@(GLMM _ vW _ _) reCalc vEta svU vTh = P.wrapPrefix "deltaCCS" $ do
+  P.logLE P.Diagnostic "Starting..."
+  let
+    lf          = GLM.linkFunction $ linkFunctionType glmm
+    (smU, mV) = spUV glmm reCalc vTh vEta
+    vMu       = VS.map (GLM.invLink lf) vEta
+    vVarW =
+      GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
+    neqs = NormalEquationsGLMM vVarW vMu svU
+  (chol, dBetaU) <- cholmodCholeskySolutions' cf smU mV neqs (mixedModel glmm)
+  P.logLE P.Diagnostic "Finished."
+  return (dBetaU, chol, smU)
 
 pirlsConvergence
   :: EffectsIO r

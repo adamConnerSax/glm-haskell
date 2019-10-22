@@ -53,7 +53,7 @@ throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
-  let lmmControls = LMMControls LMM_NELDERMEAD --defaultLMMControls
+  let lmmControls = LMMControls LMM_BOBYQA --defaultLMMControls
   let glmmControls =
         GLMMControls lmmControls GLM.UseCanonical 10 (ConvergeSimple 0.05 20)
 
@@ -70,7 +70,7 @@ main = do
       vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
       asGLMM x = GLMM x vW GLM.Normal glmmControls
 -}
-{-
+
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
   let
@@ -86,7 +86,6 @@ main = do
     vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
     asGLMM x = GLMM x vW GLM.Normal glmmControls
 
--}
 {-
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
                                                                (const True)
@@ -104,7 +103,7 @@ main = do
       vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
       asGLMM x = GLMM x vW GLM.Normal glmmControls
 -}
-
+{-
   frame <- defaultLoadToFrame @'[Row, Herd, Incidence, Size, Period, Obs]
     cbppCSV
     (const True)
@@ -120,7 +119,7 @@ main = do
       vW             = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
       vN = LA.fromList $ fmap (F.rgetField @Size) $ FL.fold FL.list frame
       asGLMM mm = GLMM mm vW (GLM.Binomial vN) glmmControls
-
+-}
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
@@ -163,10 +162,10 @@ main = do
     checkProblem mm randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
 -- compare LMM and GLMM with ObservationDistribution set to Normal
-{-    liftIO $ putStrLn "LMM"
+    liftIO $ putStrLn "LMM"
     (th2_LMM, pd2_LMM, sigma2_LMM, vBetaU2_LMM, vb2_LMM, cs_LMM) <-
       minimizeDeviance mdVerbosity ML (asLMM mm) randomEffectCalc th0
--}
+
     liftIO $ putStrLn $ "GLMM"
     (th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM) <-
       minimizeDeviance mdVerbosity ML (asGLMM mm) randomEffectCalc th0

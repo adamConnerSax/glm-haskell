@@ -97,7 +97,7 @@ main = do
         ]
       glmm x = LMM x lmmControls
       useLink = GLM.UseCanonical
--}
+-}  
 
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
@@ -140,6 +140,17 @@ main = do
       LA.disp 2 $ SD.toDenseMatrix smZ
     checkProblem mm randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
+    (th2_REML, pd2_REML, sigma2_REML, vBetaU2_REML, vb2_REML, cs_REML) <-
+      minimizeDeviance mdVerbosity REML (glmm mm) randomEffectCalc th0
+    liftIO $ do
+      putStrLn $ "REML Via method 2"
+      putStrLn $ "deviance=" ++ show pd2_REML
+      putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
+      putStrLn $ "beta=" ++ show (vBeta vBetaU2_REML)
+      putStrLn $ "u=" ++ show (svU vBetaU2_REML)
+      putStrLn $ "b=" ++ show vb2_REML
+    GLM.report (glmm mm) smZ (vBeta vBetaU2_REML) (SD.toSparseVector vb2_REML)
+
     (th2_ML, pd2_ML, sigma2_ML, vBetaU2_ML, vb2_ML, cs_ML) <- minimizeDeviance
       mdVerbosity
       ML
@@ -152,27 +163,18 @@ main = do
       putStrLn $ "beta=" ++ show (vBeta vBetaU2_ML)
       putStrLn $ "u=" ++ show (svU vBetaU2_ML)
       putStrLn $ "b=" ++ show vb2_ML
-    (th2_REML, pd2_REML, sigma2_REML, vBetaU2_REML, vb2_REML, cs_REML) <-
-      minimizeDeviance mdVerbosity REML (glmm mm) randomEffectCalc th0
-    GLM.report (glmm mm) smZ (vBeta vBetaU2_ML) (SD.toSparseVector vb2_ML)
-    liftIO $ do
-      putStrLn $ "REML Via method 2"
-      putStrLn $ "deviance=" ++ show pd2_REML
-      putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
-      putStrLn $ "beta=" ++ show (vBeta vBetaU2_REML)
-      putStrLn $ "u=" ++ show (svU vBetaU2_REML)
-      putStrLn $ "b=" ++ show vb2_REML
-    GLM.report (glmm mm) smZ (vBeta vBetaU2_REML) (SD.toSparseVector vb2_REML)
 
-    let fes_REML =
-          GLM.fixedEffectStatistics (glmm mm) sigma2_ML cs_ML vBetaU2_REML
-    liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_REML
-    epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_REML
+    GLM.report (glmm mm) smZ (vBeta vBetaU2_ML) (SD.toSparseVector vb2_ML)
+
+    let fes_ML =
+          GLM.fixedEffectStatistics (glmm mm) sigma2_ML cs_ML vBetaU2_ML
+    liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_ML
+    epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_ML
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
     gec <- GLM.effectCovariancesByGroup effectsByGroup
                                         (glmm mm)
-                                        sigma2_REML
-                                        th2_REML
+                                        sigma2_ML
+                                        th2_ML
     liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
     rebl <- GLM.randomEffectsByLabel epg rowClassifier
     liftIO
@@ -184,7 +186,7 @@ main = do
           fitted <- GLM.fitted (glmm mm)
                                getPredictor
                                groupLabels
-                               fes_REML
+                               fes_ML
                                epg
                                rowClassifier
                                r
