@@ -41,8 +41,12 @@ linkFunction IdentityLink = LinkFunction id id (const 1)
 
 linkFunction LogisticLink = LinkFunction
   (\x -> log (x / (1 - x)))
-  (\x -> let y = exp x in y / (1 + y))
-  (\x -> let y = exp x in y / ((1 + y) ** 2))
+  (\x -> let y = exp (-x) in 1 / (1 + y))
+  (\x ->
+    let y = exp (-x)
+        z = 1 + y
+    in  y / (z * z)
+  )
 
 
 linkFunction ExponentialLink = LinkFunction log exp exp
