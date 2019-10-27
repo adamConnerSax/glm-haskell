@@ -13,9 +13,16 @@ import qualified Data.Vector.Storable          as LA
 import qualified Numeric.MathFunctions.Constants
                                                as MC
 
+import qualified Statistics.Distribution       as S
+import qualified Statistics.Distribution.Binomial
+                                               as S
+import qualified Statistics.Distribution.Gamma as S
+import qualified Statistics.Distribution.Poisson
+                                               as S
 
 data ObservationDistribution = Normal
                              | Binomial (LA.Vector Int) -- vector of total counts
+                             | Bernoulli
                              | Poisson
                              | Gamma deriving (Show, Eq)
 
@@ -34,11 +41,11 @@ data LinkFunction = LinkFunction { link :: Double -> Double -- map from observat
 canonicalLink :: ObservationDistribution -> LinkFunctionType
 canonicalLink Normal       = IdentityLink
 canonicalLink (Binomial _) = LogisticLink
+canonicalLink Bernoulli    = LogisticLink
 canonicalLink Poisson      = ExponentialLink
 
 linkFunction :: LinkFunctionType -> LinkFunction
 linkFunction IdentityLink = LinkFunction id id (const 1)
-
 linkFunction LogisticLink = LinkFunction
   (\x -> log (x / (1 - x)))
   (\x -> let y = exp (-x) in 1 / (1 + y))
@@ -47,8 +54,6 @@ linkFunction LogisticLink = LinkFunction
         z = 1 + y
     in  y / (z * z)
   )
-
-
 linkFunction ExponentialLink = LinkFunction log exp exp
 
 
@@ -57,7 +62,6 @@ data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
 -- notation here:
 -- y are the observations
 -- mu is the conditional mean of the linear predictor after mapping via the link function
-
 familyWeights :: ObservationDistribution -> LA.Vector Double -> LA.Vector Double
 familyWeights (Binomial vN) vW =
   let f w n = w * realToFrac n in LA.zipWith f vW vN
@@ -73,21 +77,17 @@ varianceScaledWeights od vW vMu =
 
 deviance
   :: ObservationDistribution
-  -> UseLink
   -> LA.Vector Double
   -> LA.Vector Double
   -> LA.Vector Double
   -> Double
-deviance od ul vW vY vEta
+deviance od vW vY vMu
   = let
       eps     = 1e-12
       weights = familyWeights od vW
-      iLink   = invLink . linkFunction $ case ul of
-        UseCanonical -> canonicalLink od
-        UseOther lft -> lft
-      vMu = LA.map iLink vEta
       f y mu = case od of
         Normal       -> (y - mu) ** 2
+        Bernoulli    -> -2 * (y * log mu + (1 - y) * log (1 - mu))
         (Binomial _) -> if y < eps
           then -2 * log (1 - mu) -- y = 0
           else if (1 - y) < eps
@@ -101,12 +101,32 @@ deviance od ul vW vY vEta
     in
       LA.sumElements $ LA.zipWith3 (g f) weights vY vMu
 
+{-
+logLikelihood
+  :: LA.Vector Double
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> Double
+logLikelihood od ul vW vY vEta
+
+aic
+  :: ObservationDistribution
+  -> UseLink
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> Double
+aic od ul vW vY vEta
+  = let
+-}
+
 variance :: ObservationDistribution -> LA.Vector Double -> LA.Vector Double
 variance od =
   let eps = 1e-12
       f x = case od of
         Normal       -> 1 -- this is wrong so maybe this is a scaled variance for distributions with an overall scale??
         (Binomial _) -> x * (1 - x)
+        Bernoulli    -> x * (1 - x)  -- ??
         Poisson      -> x
         Gamma        -> x * x
       g x = if x > eps then f x else eps

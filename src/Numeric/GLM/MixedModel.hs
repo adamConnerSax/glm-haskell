@@ -591,11 +591,13 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
     let
       MixedModel (RegressionModel _ mX vY) _ = mixedModel glmm
       (          RandomEffectCalculated smZ                    mkLambda) = re
-      (observationDistribution, vW) = case glmm of
+      (od, vW) = case glmm of
         LMM _ _ -> (GLM.Normal, (LA.fromList $ L.replicate (LA.size vY) 1.0))
         GLMM _ vW' od _ -> (od, vW')
-      logLth        = logDetTriangularSM (lTheta chol)
-      dev2 = GLM.deviance observationDistribution (useLink glmm) vW vY vEta
+      logLth = logDetTriangularSM (lTheta chol)
+      vMu =
+        LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType glmm)) vEta
+      dev2          = GLM.deviance od vW vY vMu
       rTheta2       = dev2 + (SLA.norm2Sq svU)
       n             = LA.size vY
       (_  , p     ) = LA.size mX
