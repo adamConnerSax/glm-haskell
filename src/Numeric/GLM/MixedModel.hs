@@ -13,7 +13,7 @@ import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
                                                as CH
 import qualified Numeric.SparseDenseConversions
                                                as SD
-import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Data.IndexedSet               as IS
 

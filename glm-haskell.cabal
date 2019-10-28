@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6f96ae2855ab31fa771da6c723f1bc9fb63e8f28fe5d42a460e9bfdbb4fc2205
+-- hash: 79a558d9f0c9267939148991279110a659032e699eb01c3665461ac5b3c37973
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -38,8 +38,8 @@ library
       Data.IndexedSet
       Numeric.GLM.FunctionFamily
       Numeric.GLM.MixedModel
+      Numeric.GLM.ProblemTypes
       Numeric.GLM.Report
-      Numeric.GLM.Types
       Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
       Numeric.SparseDenseConversions
       Polysemy.ConstraintAbsorber.MonadCatch

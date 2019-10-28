@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Numeric.GLM.Types
+module Numeric.GLM.ProblemTypes
   ( WithIntercept(..)
   , IndexedEffectSet
   , FixedEffects(..)

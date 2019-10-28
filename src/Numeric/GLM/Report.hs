@@ -8,7 +8,7 @@
 module Numeric.GLM.Report where
 
 import qualified Data.IndexedSet               as IS
-import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.MixedModel        as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Numeric.SparseDenseConversions
