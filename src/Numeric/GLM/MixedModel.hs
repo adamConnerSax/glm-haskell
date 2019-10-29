@@ -188,7 +188,7 @@ pirlsMaxSteps (ConvergeOrthogonal _ n) = n
 
 data GeneralizedLinearMixedModel b g =
   LMM (MixedModel b g) LMMControls
-  | GLMM (MixedModel b g) WMatrix GLM.ObservationDistribution GLMMControls deriving (Show, Eq)
+  | GLMM (MixedModel b g) WMatrix GLM.ObservationsDistribution GLMMControls deriving (Show, Eq)
 
 mixedModel :: GeneralizedLinearMixedModel b g -> MixedModel b g
 mixedModel (LMM x _     ) = x
@@ -595,23 +595,34 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
         LMM _ _ -> (GLM.Normal, (LA.fromList $ L.replicate (LA.size vY) 1.0))
         GLMM _ vW' od _ -> (od, vW')
       logLth = logDetTriangularSM (lTheta chol)
-      vMu =
-        LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType glmm)) vEta
-      dev2          = GLM.deviance od vW vY vMu
-      rTheta2       = dev2 + (SLA.norm2Sq svU)
-      n             = LA.size vY
-      (_  , p     ) = LA.size mX
-      (dof, logDet) = case dt of
-        ML   -> (realToFrac n, logLth)
-        REML -> (realToFrac (n - p), logLth + (logDetTriangularM $ rXX chol))
-      pd = (2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof)))
-    P.logLE P.Diagnostic
-      $  "logLth="
-      <> (T.pack $ show logLth)
-      <> "; dev2="
-      <> (T.pack $ show dev2)
-      <> "; pd="
-      <> (T.pack $ show pd)
+    P.logLE P.Diagnostic $ "logLth=" <> (T.pack $ show logLth)
+    let uDotu = svU SLA.<.> svU
+    P.logLE P.Diagnostic $ "u.u=" <> (T.pack $ show uDotu)
+    (pd, rTheta2) <- case glmm of
+      LMM _ _ -> do
+        let
+          n             = LA.size vY
+          vW            = VS.replicate n 1.0
+          dev2          = GLM.deviance (GLM.Normal) vW vY vEta -- Eta and Mu are the same for the LMM
+          rTheta2       = dev2 + uDotu
+          (_  , p     ) = LA.size mX
+          (dof, logDet) = case dt of
+            ML -> (realToFrac n, logLth)
+            REML ->
+              (realToFrac (n - p), logLth + (logDetTriangularM $ rXX chol))
+        P.logLE P.Diagnostic $ "LMM deviance: " <> (T.pack $ show dev2)
+        return
+          $ ((2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof))), rTheta2)
+      GLMM _ vW od _ -> do
+        let
+          vMu = LA.cmap
+            (GLM.invLink $ GLM.linkFunction (linkFunctionType glmm))
+            vEta
+          dev2    = GLM.deviance od vW vY vMu --GLM.devianceCondAbs od vW vY vMu
+          rTheta2 = dev2 + uDotu
+        P.logLE P.Diagnostic $ "GLMM deviance: " <> (T.pack $ show dev2)
+        return $ (dev2 + uDotu + 2 * logLth, rTheta2)
+    P.logLE P.Diagnostic $ "; pd=" <> (T.pack $ show pd)
     return (pd, rTheta2)
 
 
@@ -664,8 +675,10 @@ normalEquationsRHS NormalEquationsLMM (cholmodC, cholmodF, _) smU mV vY =
 normalEquationsRHS (NormalEquationsGLMM vVarW vMu svU) (cholmodC, cholmodF, _) smU mV vY
   = P.wrapPrefix "normalEquationsRHS" $ do
 {-  
-    P.logLE P.Diagnostic $ "vW=" <> (T.pack $ show vW)
-    
+    P.logLE P.Diagnostic "Starting..."
+
+    P.logLE P.Diagnostic $ "vVarW=" <> (T.pack $ show vVarW)
+
     P.logLE P.Diagnostic $ "svU=" <> (T.pack $ show svU)
     P.logLE P.Diagnostic $ "smU=" <> (T.pack $ show smU)
     P.logLE P.Diagnostic $ "mV=" <> (T.pack $ show mV)
@@ -694,7 +707,7 @@ cholmodCholeskySolutionsLMM cholmodFactor mixedModel randomEffCalcs vTh = do
   cholmodCholeskySolutions' cholmodFactor smZS mX NormalEquationsLMM mixedModel
 
 observationDistribution
-  :: GeneralizedLinearMixedModel b g -> GLM.ObservationDistribution
+  :: GeneralizedLinearMixedModel b g -> GLM.ObservationsDistribution
 observationDistribution (LMM _ _      ) = GLM.Normal
 observationDistribution (GLMM _ _ od _) = od
 
@@ -730,7 +743,7 @@ weights
   :: GeneralizedLinearMixedModel b g -> WMatrix -> LinearPredictor -> WMatrix
 weights glmm vW vEta =
   let lf       = GLM.linkFunction $ linkFunctionType glmm
-      vMu      = VS.map (GLM.link lf) vEta
+      vMu      = VS.map (GLM.invLink lf) vEta
       vdMudEta = VS.map (GLM.derivInv lf) vEta
   in  VS.zipWith
         (*)
@@ -1044,6 +1057,7 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel =
       $ SLA.filterSM lowerTriangular
       $ xTxPlusI
       $ smU
+--    P.logLE P.Diagnostic "After factorize..."
     -- compute Rzx
 --    P.logLE P.Diagnostic "Calling normal equations."
     (svRhsZ, vRhsX) <- normalEquationsRHS nes cholmodFactor smU mV vY
@@ -1056,6 +1070,7 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModel =
 -}
     smPRhsZ         <- liftIO
       $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svRhsZ)
+--    P.logLE P.Diagnostic "After smPRhsZ..."
     svC <-
       SLA.toSV
         <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_L smPRhsZ)

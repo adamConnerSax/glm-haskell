@@ -8,7 +8,7 @@
 module Main where
 
 import qualified Data.IndexedSet               as IS
-import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Report            as GLM
@@ -54,7 +54,7 @@ main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
   let lmmControls = defaultLMMControls
-{-
+
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel
       fixedEffects :: GLM.FixedEffects ()
@@ -65,8 +65,8 @@ main = do
       effectsByGroup = M.fromList [(RG_Rail, IS.fromList [GLM.Intercept])]
       glmm x = LMM x lmmControls
       useLink = GLM.UseCanonical
--}
 
+{-
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
   let
@@ -81,7 +81,7 @@ main = do
     glmm x = LMM x lmmControls
     useLink = GLM.UseCanonical
 
-
+-}
 {-
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
                                                                (const True)

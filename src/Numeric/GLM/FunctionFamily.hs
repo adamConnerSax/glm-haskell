@@ -32,7 +32,7 @@ data ObservationDistribution = DNormal
                              | DPoisson
                              | DGamma deriving (Show, Eq)
 
-data ObservationsDistribution = Normal | Binomial (VS.Vector Int) | Bernoulli | Poisson | Gamma
+data ObservationsDistribution = Normal | Binomial (VS.Vector Int) | Bernoulli | Poisson | Gamma deriving (Show, Eq)
 
 data LinkFunctionType = IdentityLink | LogisticLink | ExponentialLink deriving (Show, Eq)
 
@@ -77,11 +77,12 @@ varianceScaledWeights
   -> LA.Vector Double
   -> LA.Vector Double
 varianceScaledWeights od vW vMu =
-  let vVar = scaledVariance od vMu in VS.zipWith (/) (familyWeights od vW) vVar
+--  let vVar = scaledVariance od vMu in VS.zipWith (/) (familyWeights od vW) vVar
+  let vVar = scaledVariance od vMu in VS.zipWith (/) vW vVar
 
 
 devianceOne :: ObservationDistribution -> Double -> Double -> Double
-devianceOne DNormal    y mu = (y - mu)
+devianceOne DNormal    y mu = let z = (y - mu) in z * z
 devianceOne DBernoulli y mu = -2 * (y * log mu + (1 - y) * log (1 - mu))
 devianceOne (DBinomial n) y mu =
   let eps = 1e-12
@@ -103,20 +104,8 @@ deviance
   -> LA.Vector Double
   -> LA.Vector Double
   -> Double
-deviance od vW vY vMu = case od of
-  Normal ->
-    VS.sum $ VS.zipWith3 (\w y mu -> w * devianceOne DNormal y mu) vW vY vMu
-  Bernoulli -> VS.sum
-    $ VS.zipWith3 (\w y mu -> w * devianceOne DBernoulli y mu) vW vY vMu
-  Binomial vN -> VS.sum $ VS.zipWith4
-    (\n w y mu -> w * devianceOne (DBinomial n) y mu)
-    vN
-    vW
-    vY
-    vMu
-  Poisson ->
-    VS.sum $ VS.zipWith3 (\w y mu -> w * devianceOne DPoisson y mu) vW vY vMu
-  Gamma -> VS.sum $ VS.zipWith3 (\w y mu -> devianceOne DGamma y mu) vW vY vMu
+deviance od vW vY vMu =
+  VS.sum $ zipDist3 od (\od w y mu -> w * devianceOne od y mu) vW vY vMu
 
 -- don't quite get this
 devScale
@@ -131,7 +120,7 @@ devScale od vW vY vMu =
   in  case od of
         Normal -> VS.replicate n (dev / realToFrac n)
         Gamma  -> let sumWgts = VS.sum vW in VS.map (* (dev / sumWgts)) vW
-        _      -> VS.replicate (LA.size vMu) 1
+        _      -> VS.replicate n 1
 
 devianceCondRel
   :: ObservationsDistribution
@@ -155,7 +144,7 @@ logLikelihoodOne
   :: ObservationDistribution
   -> Double
   -> Double
-  -> Double -- dev, might be igbored
+  -> Double -- dev, might be ignored
   -> Double
 logLikelihoodOne DNormal y mu dev =
   S.logDensity (S.normalDistr 0 (sqrt dev)) (y - mu) --let z = (y - mu) in -log (2 * pi * dev)/2 - z*z/(2*dev)
@@ -165,7 +154,7 @@ logLikelihoodOne (DBinomial count) y mu _ =
   S.logProbability (S.binomial count mu) (round $ realToFrac count * y)
 logLikelihoodOne DPoisson y mu _ = S.logProbability (S.poisson mu) (round y)
 logLikelihoodOne DGamma y mu dev =
-  S.logDensity (S.gammaDistr (1 / dev) (mu * dev)) y
+  S.logDensity (S.gammaDistr (1 / dev) (mu * dev)) y -- TODO: not sure I have these params right!!
 
 logLikelihood
   :: ObservationsDistribution
@@ -174,33 +163,9 @@ logLikelihood
   -> LA.Vector Double
   -> LA.Vector Double -- dev, might be ignored
   -> Double
-logLikelihood Normal vW vY vMu vDev = VS.sum $ VS.zipWith4
-  (\w y mu d -> w * logLikelihoodOne DNormal y mu d)
-  vW
-  vY
-  vMu
-  vDev
-logLikelihood Bernoulli vW vY vMu vDev = VS.sum $ VS.zipWith4
-  (\w y mu d -> w * logLikelihoodOne DBernoulli y mu d)
-  vW
-  vY
-  vMu
-  vDev
-logLikelihood (Binomial vN) vW vY vMu vDev = VS.sum $ VS.zipWith5
-  (\n w y mu d -> w * logLikelihoodOne (DBinomial n) y mu d)
-  vN
-  vW
-  vY
-  vMu
-  vDev
-logLikelihood Poisson vW vY vMu vDev = VS.sum $ VS.zipWith4
-  (\w y mu d -> w * logLikelihoodOne DPoisson y mu d)
-  vW
-  vY
-  vMu
-  vDev
-logLikelihood Gamma vW vY vMu vDev = VS.sum $ VS.zipWith4
-  (\w y mu d -> w * logLikelihoodOne DGamma y mu d)
+logLikelihood od vW vY vMu vDev = VS.sum $ zipDist4
+  od
+  (\od w y mu dev -> w * logLikelihoodOne od y mu dev)
   vW
   vY
   vMu
@@ -231,7 +196,23 @@ aic od vW vY vMu vDev =
         Normal -> 1
         Gamma  -> 1
         _      -> 0
-  in  2 * (1 - logLikelihood od vW vY vMu vDev)
+  in  realToFrac (2 * nParam) - 2 * logLikelihood od vW vY vMu vDev
+
+aicR
+  :: ObservationsDistribution
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> Double -- may be ignored
+  -> Double
+aicR od vW vY vMu dev =
+  let vDev   = VS.replicate (VS.length vW) dev
+      nParam = case od of
+        Normal -> 1
+        Gamma  -> 1
+        _      -> 0
+  in  realToFrac (2 * nParam) - 2 * logLikelihood od vW vY vMu vDev
+
 
 -- this needs a better name.  Which means I need to understand it.
 -- scaled variance?
@@ -253,6 +234,43 @@ scaledVariance Gamma   vMu = VS.map (scaledVarianceOne DGamma) vMu
 
 
 -- Numeric helpers 
+
+zipDist3
+  :: (VS.Storable x1, VS.Storable x2, VS.Storable x3, VS.Storable x4)
+  => ObservationsDistribution
+  -> (ObservationDistribution -> x1 -> x2 -> x3 -> x4)
+  -> VS.Vector x1
+  -> VS.Vector x2
+  -> VS.Vector x3
+  -> VS.Vector x4
+zipDist3 Normal        f = VS.zipWith3 (f DNormal)
+zipDist3 Bernoulli     f = VS.zipWith3 (f DBernoulli)
+zipDist3 (Binomial vN) f = VS.zipWith4 (\n -> f (DBinomial n)) vN
+zipDist3 Poisson       f = VS.zipWith3 (f DPoisson)
+zipDist3 Gamma         f = VS.zipWith3 (f DGamma)
+
+zipDist4
+  :: ( VS.Storable x1
+     , VS.Storable x2
+     , VS.Storable x3
+     , VS.Storable x4
+     , VS.Storable x5
+     )
+  => ObservationsDistribution
+  -> (ObservationDistribution -> x1 -> x2 -> x3 -> x4 -> x5)
+  -> LA.Vector x1
+  -> LA.Vector x2
+  -> LA.Vector x3
+  -> LA.Vector x4
+  -> LA.Vector x5
+zipDist4 Normal        f = VS.zipWith4 (f DNormal)
+zipDist4 Bernoulli     f = VS.zipWith4 (f DBernoulli)
+zipDist4 (Binomial vN) f = VS.zipWith5 (\n -> f (DBinomial n)) vN
+zipDist4 Poisson       f = VS.zipWith4 (f DPoisson)
+zipDist4 Gamma         f = VS.zipWith4 (f DGamma)
+
+
+
 {-
 yLny :: Double -> Double
 yLny x =

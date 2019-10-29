@@ -8,7 +8,7 @@
 module Main where
 
 import qualified Data.IndexedSet               as IS
-import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Report            as GLM
@@ -53,9 +53,12 @@ throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
-  let lmmControls = LMMControls LMM_NELDERMEAD --defaultLMMControls
-  let glmmControls =
-        GLMMControls lmmControls GLM.UseCanonical 10 (ConvergeSimple 0.05 20)
+  let lmmControls = LMMControls LMM_BOBYQA --defaultLMMControls
+
+  let glmmControls = GLMMControls (LMMControls LMM_NELDERMEAD)
+                                  GLM.UseCanonical
+                                  10
+                                  (ConvergeSimple 0.05 20)
 
 {-
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
@@ -162,7 +165,8 @@ main = do
     checkProblem mm randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
 -- compare LMM and GLMM with ObservationDistribution set to Normal
-{-    liftIO $ putStrLn "LMM"
+{-    
+    liftIO $ putStrLn "LMM"
     (th2_LMM, pd2_LMM, sigma2_LMM, vBetaU2_LMM, vb2_LMM, cs_LMM) <-
       minimizeDeviance mdVerbosity ML (asLMM mm) randomEffectCalc th0
 -}

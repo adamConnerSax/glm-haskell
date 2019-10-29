@@ -19,7 +19,7 @@
 module DataFrames where
 
 import qualified Data.IndexedSet               as IS
-import qualified Numeric.GLM.Types             as GLM
+import qualified Numeric.GLM.ProblemTypes      as GLM
 
 import qualified Frames                        as F
 import qualified Frames.CSV                    as F
