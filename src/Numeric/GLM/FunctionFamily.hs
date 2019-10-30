@@ -34,7 +34,7 @@ data ObservationDistribution = DNormal
 
 data ObservationsDistribution = Normal | Binomial (VS.Vector Int) | Bernoulli | Poisson | Gamma deriving (Show, Eq)
 
-data LinkFunctionType = IdentityLink | LogisticLink | ExponentialLink deriving (Show, Eq)
+data LinkFunctionType = IdentityLink | LogisticLink | ExponentialLink | ReciprocalLink deriving (Show, Eq)
 
 data LinkFunction = LinkFunction { link :: Double -> Double -- map from observation to linear predictor
                                  , invLink :: Double -> Double -- map from linear predictor to obervations
@@ -46,6 +46,7 @@ canonicalLink Normal       = IdentityLink
 canonicalLink (Binomial _) = LogisticLink
 canonicalLink Bernoulli    = LogisticLink
 canonicalLink Poisson      = ExponentialLink
+canonicalLink Gamma        = ReciprocalLink
 
 linkFunction :: LinkFunctionType -> LinkFunction
 linkFunction IdentityLink = LinkFunction id id (const 1)
@@ -58,7 +59,8 @@ linkFunction LogisticLink = LinkFunction
     in  y / (z * z)
   )
 linkFunction ExponentialLink = LinkFunction log exp exp
-
+linkFunction ReciprocalLink =
+  LinkFunction (\x -> -1 / x) (\x -> -1 / x) (\x -> 1 / (x * x))
 
 data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
 
@@ -154,7 +156,7 @@ logLikelihoodOne (DBinomial count) y mu _ =
   S.logProbability (S.binomial count mu) (round $ realToFrac count * y)
 logLikelihoodOne DPoisson y mu _ = S.logProbability (S.poisson mu) (round y)
 logLikelihoodOne DGamma y mu dev =
-  S.logDensity (S.gammaDistr (1 / dev) (mu * dev)) y -- TODO: not sure I have these params right!!
+  S.logDensity (S.gammaDistr (1 / dev) (mu * dev)) y -- NB: this is shape & scale.  mean = mu, var = dev
 
 logLikelihood
   :: ObservationsDistribution

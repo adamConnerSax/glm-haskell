@@ -185,7 +185,6 @@ pirlsMaxSteps :: PIRLSConvergence -> MaxPIRLSSteps
 pirlsMaxSteps (ConvergeSimple     _ n) = n
 pirlsMaxSteps (ConvergeOrthogonal _ n) = n
 
-
 data GeneralizedLinearMixedModel b g =
   LMM (MixedModel b g) LMMControls
   | GLMM (MixedModel b g) WMatrix GLM.ObservationsDistribution GLMMControls deriving (Show, Eq)
@@ -619,9 +618,15 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
             (GLM.invLink $ GLM.linkFunction (linkFunctionType glmm))
             vEta
           dev2    = GLM.deviance od vW vY vMu --GLM.devianceCondAbs od vW vY vMu
+          aic     = GLM.aicR od vW vY vMu dev2
           rTheta2 = dev2 + uDotu
-        P.logLE P.Diagnostic $ "GLMM deviance: " <> (T.pack $ show dev2)
-        return $ (dev2 + uDotu + 2 * logLth, rTheta2)
+
+        P.logLE P.Diagnostic
+          $  "GLMM: dev= "
+          <> (T.pack $ show dev2)
+          <> "; aicR="
+          <> (T.pack $ show aic)
+        return $ (aic + uDotu + 2 * logLth, rTheta2)
     P.logLE P.Diagnostic $ "; pd=" <> (T.pack $ show pd)
     return (pd, rTheta2)
 
@@ -725,32 +730,29 @@ spUV
   -> RandomEffectCalculated
   -> CovarianceVec
   -> LinearPredictor
-  -> (UMatrix, VMatrix)
+  -> (UMatrix, VMatrix, WMatrix)
 
-spUV (LMM (MixedModel (RegressionModel _ mX _) _) _) (RandomEffectCalculated smZ mkLambda) vTh _
-  = (smZ SLA.#~# mkLambda vTh, mX)
+spUV (LMM (MixedModel (RegressionModel _ mX vY) _) _) (RandomEffectCalculated smZ mkLambda) vTh _
+  = (smZ SLA.#~# mkLambda vTh, mX, VS.replicate (VS.length vY) 1)
 
 spUV glmm@(GLMM (MixedModel (RegressionModel _ mX _) _) vW _ _) (RandomEffectCalculated smZ mkLambda) vTh vEta
   = let smZS      = smZ SLA.#~# mkLambda vTh
-        mWdMudEta = LA.diag $ weights glmm vW vEta
+        vWdMudEta = weights glmm vW vEta
+        mWdMudEta = LA.diag vWdMudEta
         smU       = SD.toSparseMatrix mWdMudEta SLA.#~# smZS
         mV        = mWdMudEta LA.<> mX
-    in  (smU, mV)
+    in  (smU, mV, vWdMudEta)
 
 type ZStarMatrix = SLA.SpMatrix Double
 
 weights
   :: GeneralizedLinearMixedModel b g -> WMatrix -> LinearPredictor -> WMatrix
 weights glmm vW vEta =
-  let lf       = GLM.linkFunction $ linkFunctionType glmm
-      vMu      = VS.map (GLM.invLink lf) vEta
-      vdMudEta = VS.map (GLM.derivInv lf) vEta
-  in  VS.zipWith
-        (*)
-        ( VS.map sqrt
-        $ GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
-        )
-        vdMudEta
+  let lf        = GLM.linkFunction $ linkFunctionType glmm
+      vMu       = VS.map (GLM.invLink lf) vEta
+      vdMudEta  = VS.map (GLM.derivInv lf) vEta
+      vVariance = GLM.scaledVariance (observationDistribution glmm) vMu
+  in  VS.zipWith3 (\w muEta var -> muEta * sqrt (w / var)) vW vdMudEta vVariance
 
 getCholeskySolutions
   :: EffectsIO r
@@ -794,15 +796,16 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
         P.logLE P.Diagnostic
           $  "iterateUntilConverged (n="
           <> (T.pack $ show n)
-          <> ")..."
-        ((vEta', svU'), chol, dBetaU, smU) <- updateEtaBetaU cf
-                                                             glmm
-                                                             maxHalvings
-                                                             reCalc
-                                                             pdFunction
-                                                             vEta
-                                                             svU
-                                                             vTh
+          <> ")"
+
+        (vEta', svU', chol, dBetaU, smU) <- updateEtaBetaU cf
+                                                           glmm
+                                                           maxHalvings
+                                                           reCalc
+                                                           pdFunction
+                                                           vEta
+                                                           svU
+                                                           vTh
         occ <- pirlsConvergence glmm
                                 smZS
                                 smP
@@ -840,28 +843,27 @@ updateEtaBetaU
   -> CovarianceVec
   -> P.Sem
        r
-       ( (EtaVec, UVec)
+       ( EtaVec
+       , UVec
        , CholeskySolutions
        , BetaU
        , SLA.SpMatrix Double
        )
 updateEtaBetaU cf glmm maxHalvings reCalc pdFunction vEta svU vTh =
-  P.wrapPrefix "iterateOne" $ do
-    P.logLE P.Diagnostic "Starting..."
+  P.wrapPrefix "updateEtaBetaU" $ do
+    P.logLE P.Diagnostic $ "Starting (Eta=" <> (T.pack $ show vEta) <> ")"
     (dBetaU, chol, smU) <- compute_dBetaU cf glmm reCalc vEta svU vTh
     P.logLE P.Diagnostic $ "d" <> (T.pack $ show dBetaU)
-    refined <- refine_dBetaU glmm
-                             maxHalvings
-                             reCalc
-                             (pdFunction chol)
-                             vEta
-                             svU
-                             dBetaU
-                             vTh
-    P.logLE P.Diagnostic "Finished."
-    P.logLE P.Diagnostic $ "Orig: " <> (T.pack $ show (vEta, svU))
-    P.logLE P.Diagnostic $ "Refined: d" <> (T.pack $ show refined)
-    return (refined, chol, dBetaU, smU)
+    (vEta', svU', dBetaU') <- refine_dBetaU glmm
+                                            maxHalvings
+                                            reCalc
+                                            (pdFunction chol)
+                                            vEta
+                                            svU
+                                            dBetaU
+                                            vTh
+    P.logLE P.Diagnostic $ "Finished (Eta=" <> (T.pack $ show vEta') <> ")"
+    return (vEta', svU', chol, dBetaU', smU)
 
 data ShrinkPD = Shrunk EtaVec UVec | NotShrunk Double EtaVec UVec Double deriving (Show)
 
@@ -875,7 +877,7 @@ refine_dBetaU
   -> UVec
   -> BetaU
   -> CovarianceVec
-  -> P.Sem r (EtaVec, UVec)
+  -> P.Sem r (EtaVec, UVec, BetaU)
 refine_dBetaU glmm maxHalvings reCalc pdF vEta svU dBetaU vTh =
   P.wrapPrefix "refineDBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..."
@@ -920,8 +922,8 @@ refine_dBetaU glmm maxHalvings reCalc pdF vEta svU dBetaU vTh =
               P.throw $ OtherGLMError
                 "Too many step-halvings in getCholeskySolutions."
           sh@(Shrunk vEtaFinal svUFinal) -> do
-            P.logLE P.Diagnostic $ "refined: " <> (T.pack $ show sh)
-            return (vEtaFinal, svUFinal)
+--            P.logLE P.Diagnostic $ "refined: " <> (T.pack $ show sh)
+            return (vEtaFinal, svUFinal, scaleBetaU x dBetaU)
     check maxHalvings 1.0
 
 
@@ -937,13 +939,13 @@ compute_dBetaU
        r
        (BetaU, CholeskySolutions, SLA.SpMatrix Double)
 compute_dBetaU cf glmm@(GLMM _ vW _ _) reCalc vEta svU vTh =
-  P.wrapPrefix "deltaCCS" $ do
+  P.wrapPrefix "compute_dBetaU" $ do
     P.logLE P.Diagnostic "Starting..."
-    let lf        = GLM.linkFunction $ linkFunctionType glmm
-        (smU, mV) = spUV glmm reCalc vTh vEta
-        vMu       = VS.map (GLM.invLink lf) vEta
-        vVarW = GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
-        neqs      = NormalEquationsGLMM vVarW vMu svU
+    let lf             = GLM.linkFunction $ linkFunctionType glmm
+        (smU, mV, vW') = spUV glmm reCalc vTh vEta
+        vMu            = VS.map (GLM.invLink lf) vEta
+--        vVarW = GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
+        neqs           = NormalEquationsGLMM vW' vMu svU
     (chol, dBetaU) <- cholmodCholeskySolutions' cf smU mV neqs (mixedModel glmm)
     P.logLE P.Diagnostic "Finished."
     return (dBetaU, chol, smU)
@@ -969,13 +971,13 @@ pirlsConvergence (LMM _ _) _ _ _ _ _ _ _ _ =
 pirlsConvergence glmm@(GLMM mm _ _ glmmC) smZS smP smL smU vEta vEta' svU svdU
   = P.wrapPrefix "pirlsConvergence" $ do
     let (GLMMControls _ _ _ pirlsC) = glmmC
-    P.logLE P.Diagnostic $ "U=" <> (T.pack $ show svU)
-    P.logLE P.Diagnostic $ "dU=" <> (T.pack $ show svdU)
+--    P.logLE P.Diagnostic $ "U=" <> (T.pack $ show svU)
+--    P.logLE P.Diagnostic $ "dU=" <> (T.pack $ show svdU)
     case pirlsC of
       ConvergeSimple _ _ -> do
         let dEta = vEta' - vEta
-        P.logLE P.Diagnostic $ "Eta=" <> (T.pack $ show vEta')
-        P.logLE P.Diagnostic $ "dEta=" <> (T.pack $ show dEta)
+--        P.logLE P.Diagnostic $ "Eta=" <> (T.pack $ show vEta')
+--        P.logLE P.Diagnostic $ "dEta=" <> (T.pack $ show dEta)
         return $ (LA.norm_2 dEta) / (LA.norm_2 vEta')
       ConvergeOrthogonal _ _ -> do
         let MixedModel (RegressionModel _ mX vY) _ = mm
@@ -987,10 +989,10 @@ pirlsConvergence glmm@(GLMM mm _ _ glmmC) smZS smP smL smU vEta vEta' svU svdU
             x3 = smP SLA.#> (SLA.transpose smU SLA.#> svYMinusMu) SLA.^-^ svU
             q'         = realToFrac $ snd $ SLA.dim smZS
             n'         = realToFrac $ LA.size vY
-        P.logLE P.Diagnostic $ "L'dU=" <> (T.pack $ show x1)
-        P.logLE P.Diagnostic $ "LL'dU=" <> (T.pack $ show x2)
-        P.logLE P.Diagnostic $ "(y - mu)" <> (T.pack $ show svYMinusMu)
-        P.logLE P.Diagnostic $ "P(smU')*(y - mu) - u=" <> (T.pack $ show x3)
+--        P.logLE P.Diagnostic $ "L'dU=" <> (T.pack $ show x1)
+--        P.logLE P.Diagnostic $ "LL'dU=" <> (T.pack $ show x2)
+--        P.logLE P.Diagnostic $ "(y - mu)" <> (T.pack $ show svYMinusMu)
+--        P.logLE P.Diagnostic $ "P(smU')*(y - mu) - u=" <> (T.pack $ show x3)
         return $ (SLA.norm2 x1 / sqrt q') / (SLA.norm2 x2 / sqrt (n' - q'))
 
 -- compute a starting point for the linear predictor.  Just assume the given observations but fix any out of bounds
