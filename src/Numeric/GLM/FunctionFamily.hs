@@ -153,7 +153,7 @@ logLikelihoodOne DNormal y mu dev =
 logLikelihoodOne DBernoulli y mu _ =
   S.logProbability (S.binomial 1 mu) (round y)
 logLikelihoodOne (DBinomial count) y mu _ =
-  S.logProbability (S.binomial count mu) (round $ realToFrac count * y)
+  S.logProbability (S.binomial count mu) (round $ (realToFrac count) * y)
 logLikelihoodOne DPoisson y mu _ = S.logProbability (S.poisson mu) (round y)
 logLikelihoodOne DGamma y mu dev =
   S.logDensity (S.gammaDistr (1 / dev) (mu * dev)) y -- NB: this is shape & scale.  mean = mu, var = dev

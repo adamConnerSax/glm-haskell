@@ -617,10 +617,9 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
           vMu = LA.cmap
             (GLM.invLink $ GLM.linkFunction (linkFunctionType glmm))
             vEta
-          dev2    = GLM.deviance od vW vY vMu --GLM.devianceCondAbs od vW vY vMu
-          aic     = GLM.aicR od vW vY vMu dev2
-          rTheta2 = dev2 + uDotu
-
+          devResid = GLM.deviance od vW vY vMu --GLM.devianceCondAbs od vW vY vMu
+          aic      = GLM.aicR od vW vY vMu dev2
+          rTheta2  = dev2 + uDotu
         P.logLE P.Diagnostic
           $  "GLMM: dev= "
           <> (T.pack $ show dev2)
