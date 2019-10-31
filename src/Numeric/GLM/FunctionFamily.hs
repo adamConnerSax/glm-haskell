@@ -93,7 +93,7 @@ devianceOne (DBinomial n) y mu =
         else if (1 - y) < eps
           then negate $ log mu
           else (y * log (y / mu) + (1 - y) * log ((1 - y) / (1 - mu)))
-  in  2 * (realToFrac n) * x
+  in  2 * x -- should this be multiplied by n?
 devianceOne DPoisson y mu =
   let eps = 1e-12
       x   = if y < eps then mu else (y * log (y / mu) - (y - mu))
