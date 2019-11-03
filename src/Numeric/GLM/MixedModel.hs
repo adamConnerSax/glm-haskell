@@ -602,14 +602,16 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
         let
           n             = LA.size vY
           vW            = VS.replicate n 1.0
-          dev2          = GLM.deviance (GLM.Normal) vW vY vEta -- Eta and Mu are the same for the LMM
-          rTheta2       = dev2 + uDotu
+          devResidual   = GLM.deviance (GLM.Normal) vW vY vEta -- Eta and Mu are the same for the LMM
+          rTheta2       = devResidual + uDotu
           (_  , p     ) = LA.size mX
           (dof, logDet) = case dt of
             ML -> (realToFrac n, logLth)
             REML ->
               (realToFrac (n - p), logLth + (logDetTriangularM $ rXX chol))
-        P.logLE P.Diagnostic $ "LMM deviance: " <> (T.pack $ show dev2)
+        P.logLE P.Diagnostic
+          $  "LMM devResidual: "
+          <> (T.pack $ show devResidual)
         return
           $ ((2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof))), rTheta2)
       GLMM _ vW od _ -> do
@@ -617,12 +619,12 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
           vMu = LA.cmap
             (GLM.invLink $ GLM.linkFunction (linkFunctionType glmm))
             vEta
-          devResid = GLM.deviance od vW vY vMu --GLM.devianceCondAbs od vW vY vMu
-          aic      = GLM.aicR od vW vY vMu devResid
-          rTheta2  = devResid + uDotu
+          devResidual = GLM.deviance od vW vY vMu --GLM.devianceCondAbs od vW vY vMu
+          aic         = GLM.aicR od vW vY vMu devResidual
+          rTheta2     = devResidual + uDotu
         P.logLE P.Diagnostic
           $  "GLMM: devResid= "
-          <> (T.pack $ show devResid)
+          <> (T.pack $ show devResidual)
           <> "; aicR="
           <> (T.pack $ show aic)
         return $ (aic + uDotu + 2 * logLth, rTheta2)
@@ -729,10 +731,10 @@ spUV
   -> RandomEffectCalculated
   -> CovarianceVec
   -> LinearPredictor
-  -> (UMatrix, VMatrix, WMatrix)
+  -> (UMatrix, VMatrix)
 
 spUV (LMM (MixedModel (RegressionModel _ mX vY) _) _) (RandomEffectCalculated smZ mkLambda) vTh _
-  = (smZ SLA.#~# mkLambda vTh, mX, VS.replicate (VS.length vY) 1)
+  = (smZ SLA.#~# mkLambda vTh, mX)
 
 spUV glmm@(GLMM (MixedModel (RegressionModel _ mX _) _) vW _ _) (RandomEffectCalculated smZ mkLambda) vTh vEta
   = let smZS      = smZ SLA.#~# mkLambda vTh
@@ -740,7 +742,7 @@ spUV glmm@(GLMM (MixedModel (RegressionModel _ mX _) _) vW _ _) (RandomEffectCal
         mWdMudEta = LA.diag vWdMudEta
         smU       = SD.toSparseMatrix mWdMudEta SLA.#~# smZS
         mV        = mWdMudEta LA.<> mX
-    in  (smU, mV, vWdMudEta)
+    in  (smU, mV)
 
 type ZStarMatrix = SLA.SpMatrix Double
 
@@ -940,11 +942,11 @@ compute_dBetaU
 compute_dBetaU cf glmm@(GLMM _ vW _ _) reCalc vEta svU vTh =
   P.wrapPrefix "compute_dBetaU" $ do
     P.logLE P.Diagnostic "Starting..."
-    let lf             = GLM.linkFunction $ linkFunctionType glmm
-        (smU, mV, vW') = spUV glmm reCalc vTh vEta
-        vMu            = VS.map (GLM.invLink lf) vEta
---        vVarW = GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
-        neqs           = NormalEquationsGLMM vW' vMu svU
+    let lf        = GLM.linkFunction $ linkFunctionType glmm
+        (smU, mV) = spUV glmm reCalc vTh vEta
+        vMu       = VS.map (GLM.invLink lf) vEta
+        vVarW = GLM.varianceScaledWeights (observationDistribution glmm) vW vMu
+        neqs      = NormalEquationsGLMM vVarW vMu svU
     (chol, dBetaU) <- cholmodCholeskySolutions' cf smU mV neqs (mixedModel glmm)
     P.logLE P.Diagnostic "Finished."
     return (dBetaU, chol, smU)
