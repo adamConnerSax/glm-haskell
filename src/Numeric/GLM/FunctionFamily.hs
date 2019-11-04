@@ -36,8 +36,8 @@ data ObservationsDistribution = Normal | Binomial (VS.Vector Int) | Bernoulli | 
 
 data LinkFunctionType = IdentityLink | LogisticLink | ExponentialLink | ReciprocalLink deriving (Show, Eq)
 
-data LinkFunction = LinkFunction { link :: Double -> Double -- map from observation to linear predictor
-                                 , invLink :: Double -> Double -- map from linear predictor to obervations
+data LinkFunction = LinkFunction { link :: Double -> Double -- map from observation to linear predictor, mu -> eta
+                                 , invLink :: Double -> Double -- map from linear predictor to observations, eta -> mu
                                  , derivInv :: Double -> Double -- useful in PIRLS algo
                                  }
 
@@ -93,7 +93,7 @@ devianceOne (DBinomial n) y mu =
         else if (1 - y) < eps
           then negate $ log mu
           else (y * log (y / mu) + (1 - y) * log ((1 - y) / (1 - mu)))
-  in  2 * realToFrac n * x -- should this be multiplied by n?
+  in  2 * (realToFrac n) * x -- should this be multiplied by n?
 devianceOne DPoisson y mu =
   let eps = 1e-12
       x   = if y < eps then mu else (y * log (y / mu) - (y - mu))

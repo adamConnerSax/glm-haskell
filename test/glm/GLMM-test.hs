@@ -60,7 +60,7 @@ main = do
                                   10
                                   (ConvergeSimple 0.05 20)
 
-{-
+
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel
       fixedEffects :: GLM.FixedEffects ()
@@ -72,7 +72,7 @@ main = do
       asLMM x = LMM x lmmControls
       vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
       asGLMM x = GLMM x vW GLM.Normal glmmControls
--}
+
 {-
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
@@ -106,7 +106,7 @@ main = do
       vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
       asGLMM x = GLMM x vW GLM.Normal glmmControls
 -}
-
+{-
   frame <- defaultLoadToFrame @'[Row, Herd, Incidence, Size, Period, Obs]
     cbppCSV
     (const True)
@@ -122,7 +122,7 @@ main = do
       vW             = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
       vN = LA.fromList $ fmap (F.rgetField @Size) $ FL.fold FL.list frame
       asGLMM mm = GLMM mm vW (GLM.Binomial vN) glmmControls
-
+-}
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
@@ -165,11 +165,39 @@ main = do
     checkProblem mm randomEffectCalc
     let mdVerbosity = if verbose then MDVSimple else MDVNone
 -- compare LMM and GLMM with ObservationDistribution set to Normal
-{-    
+
     liftIO $ putStrLn "LMM"
     (th2_LMM, pd2_LMM, sigma2_LMM, vBetaU2_LMM, vb2_LMM, cs_LMM) <-
       minimizeDeviance mdVerbosity ML (asLMM mm) randomEffectCalc th0
--}
+    GLM.report (asLMM mm) smZ (bu_vBeta vBetaU2_LMM) (SD.toSparseVector vb2_LMM)
+    let fes_LMM =
+          GLM.fixedEffectStatistics (asLMM mm) sigma2_LMM cs_LMM vBetaU2_LMM
+    liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_LMM
+    epg_LMM <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_LMM
+    liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg_LMM
+    gec_LMM <- GLM.effectCovariancesByGroup effectsByGroup
+                                            (asLMM mm)
+                                            sigma2_LMM
+                                            th2_LMM
+    liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec_LMM
+    rebl_LMM <- GLM.randomEffectsByLabel epg_LMM rowClassifier
+    liftIO
+      $  putStrLn
+      $  "Random Effects:\n"
+      ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl_LMM)
+    let fLMM r = do
+          let obs = getObservation r
+          fitted <- GLM.fitted (asLMM mm)
+                               getPredictor
+                               groupLabels
+                               fes_LMM
+                               epg_LMM
+                               rowClassifier
+                               r
+          return (obs, fitted)
+    fitted_LMM <- traverse fLMM (FL.fold FL.list frame)
+    liftIO $ putStrLn $ "Fitted:\n" ++ show fitted_LMM
+--
     liftIO $ putStrLn $ "GLMM"
     (th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM) <-
       minimizeDeviance mdVerbosity ML (asGLMM mm) randomEffectCalc th0
