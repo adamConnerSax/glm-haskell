@@ -497,6 +497,7 @@ cholmodAnalyzeProblem (RandomEffectCalculated smZ _) = do
   return (cholmodC, cholmodF, smP)
 
 data ProfiledDevianceVerbosity = PDVNone | PDVSimple | PDVAll deriving (Show, Eq)
+data OptimizationStage = Optim_LMM | Optim_GLMM_Halving | Optim_GLMM_PIRLS | Optim_GLMM_Final deriving (Show, Eq)
 
 -- this one is IO since we'll need to unsafePerformIO it
 profiledDeviance
@@ -525,6 +526,7 @@ profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambd
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
 --        smZSt  = SLA.transpose smZS
+        os     = if (generalized glmm) then Optim_GLMM_Final else Optim_LMM
     P.logLE P.Diagnostic "Starting. Calling getCholeskySolutions."
     (cs@(CholeskySolutions smLth smRzx mRxx), betaU) <- getCholeskySolutions
       cf
@@ -550,6 +552,7 @@ profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambd
                                        glmm
                                        reCalc
                                        vTh
+                                       os
                                        cs
                                        vEta
                                        (bu_svU betaU)
@@ -572,6 +575,8 @@ profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambd
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
     return (pd, sigma2, betaU, svb, cs)
 
+
+
 profiledDeviance'
   :: EffectsIO r
   => ProfiledDevianceVerbosity
@@ -579,11 +584,12 @@ profiledDeviance'
   -> GeneralizedLinearMixedModel b g
   -> RandomEffectCalculated
   -> CovarianceVec
+  -> OptimizationStage
   -> CholeskySolutions
   -> EtaVec
   -> UVec
   -> P.Sem r (Double, Double) -- profiled deviance, deviance + u'u 
-profiledDeviance' pdv dt glmm re vTh chol vEta svU =
+profiledDeviance' pdv dt glmm re vTh os chol vEta svU =
   P.wrapPrefix "profiledDeviance'" $ do
     P.logLE P.Diagnostic $ "vEta=" <> (T.pack $ show vEta)
     P.logLE P.Diagnostic $ "svU=" <> (T.pack $ show svU)
@@ -599,6 +605,10 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
     P.logLE P.Diagnostic $ "u.u=" <> (T.pack $ show uDotu)
     (pd, rTheta2) <- case glmm of
       LMM _ _ -> do
+        when (os /= Optim_LMM)
+          $ P.throw
+          $ OtherGLMError
+              "In profiledDeviance': OptimzationStage must be Optim_LMM for all LMM calls"
         let
           n             = LA.size vY
           vW            = VS.replicate n 1.0
@@ -609,9 +619,7 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
             ML -> (realToFrac n, logLth)
             REML ->
               (realToFrac (n - p), logLth + (logDetTriangularM $ rXX chol))
-        P.logLE P.Diagnostic
-          $  "LMM devResidual: "
-          <> (T.pack $ show devResidual)
+        P.logLE P.Diagnostic $ "LMM devResid=: " <> (T.pack $ show devResidual)
         return
           $ ((2 * logDet) + (dof * (1 + log (2 * pi * rTheta2 / dof))), rTheta2)
       GLMM _ vW od _ -> do
@@ -628,7 +636,14 @@ profiledDeviance' pdv dt glmm re vTh chol vEta svU =
           <> (T.pack $ show devResidual)
           <> "; aicR="
           <> (T.pack $ show aic)
-        return $ (aic + uDotu + 2 * logLth, rTheta2)
+        case os of
+          Optim_LMM ->
+            P.throw
+              $ OtherGLMError
+              $ "In profiledDeviance': OptimizationStage was Optim_LMM in a GLMM call"
+          Optim_GLMM_Halving -> return $ (devResidual + uDotu, rTheta2)
+          Optim_GLMM_PIRLS   -> return $ (devResidual + uDotu, rTheta2)
+          Optim_GLMM_Final   -> return $ (aic + uDotu + logLth, rTheta2)
     P.logLE P.Diagnostic $ "; pd=" <> (T.pack $ show pd)
     return (pd, rTheta2)
 
@@ -695,6 +710,7 @@ normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) (cholmodC, cholmodF, 
     let
       vMu        = VS.map (GLM.invLink lf) vEta
       vMuEta     = VS.map (GLM.derivInv lf) vEta
+      vYMinusMu  = vY - vMu
       vWrkResids = VS.zipWith3 (\y mu muEta -> (y - mu) / muEta) vY vMu vMuEta
       vWrkResp   = VS.zipWith (+) vEta vWrkResids
       vWtWrkResp = VS.zipWith3
@@ -703,7 +719,8 @@ normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) (cholmodC, cholmodF, 
         vMuEta
         vWrkResp
       vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVarW vY vMu
-      vX          = vWtYMinusMu
+      vZ          = VS.zipWith (*) vMuEta vWtYMinusMu
+      vX          = vYMinusMu
     P.logLE P.Diagnostic
       $  "vWtYminusMu="
       <> (T.pack $ show vWtYMinusMu)
@@ -789,8 +806,8 @@ getCholeskySolutions cf glmm@(GLMM mm vW od glmmC) reCalc vTh =
 
     let
       lf = GLM.linkFunction $ linkFunctionType glmm
-      pdFunction chol x y =
-        fst <$> profiledDeviance' PDVNone ML glmm reCalc vTh chol x y
+      pdFunction os chol x y =
+        fst <$> profiledDeviance' PDVNone ML glmm reCalc vTh os chol x y
       --incS betaU dBetaU x = addBetaU betaU (scaleBetaU x dBetaU)
 
       iterateUntilConverged n vEta svU = do
@@ -838,7 +855,12 @@ updateEtaBetaU
   -> GeneralizedLinearMixedModel b g
   -> Int
   -> RandomEffectCalculated
-  -> (CholeskySolutions -> EtaVec -> UVec -> P.Sem r Double)
+  -> (  OptimizationStage
+     -> CholeskySolutions
+     -> EtaVec
+     -> UVec
+     -> P.Sem r Double
+     )
   -> EtaVec
   -> UVec
   -> CovarianceVec
@@ -855,14 +877,15 @@ updateEtaBetaU cf glmm maxHalvings reCalc pdFunction vEta svU vTh =
     P.logLE P.Diagnostic $ "Starting (Eta=" <> (T.pack $ show vEta) <> ")"
     (dBetaU, chol, smU) <- compute_dBetaU cf glmm reCalc vEta svU vTh
     P.logLE P.Diagnostic $ "d" <> (T.pack $ show dBetaU)
-    (vEta', svU', dBetaU') <- refine_dBetaU glmm
-                                            maxHalvings
-                                            reCalc
-                                            (pdFunction chol)
-                                            vEta
-                                            svU
-                                            dBetaU
-                                            vTh
+    (vEta', svU', dBetaU') <- refine_dBetaU
+      glmm
+      maxHalvings
+      reCalc
+      (pdFunction Optim_GLMM_Halving chol)
+      vEta
+      svU
+      dBetaU
+      vTh
     P.logLE P.Diagnostic $ "Finished (Eta=" <> (T.pack $ show vEta') <> ")"
     return (vEta', svU', chol, dBetaU', smU)
 

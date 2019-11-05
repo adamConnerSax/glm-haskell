@@ -79,8 +79,8 @@ varianceScaledWeights
   -> LA.Vector Double
   -> LA.Vector Double
 varianceScaledWeights od vW vMu =
---  let vVar = scaledVariance od vMu in VS.zipWith (/) (familyWeights od vW) vVar
-  let vVar = scaledVariance od vMu in VS.zipWith (/) vW vVar
+  let vVar = scaledVariance od vMu in VS.zipWith (/) (familyWeights od vW) vVar
+--  let vVar = scaledVariance od vMu in VS.zipWith (/) vW vVar
 
 
 devianceOne :: ObservationDistribution -> Double -> Double -> Double
@@ -163,7 +163,7 @@ logLikelihood
   -> LA.Vector Double
   -> LA.Vector Double
   -> LA.Vector Double
-  -> LA.Vector Double -- dev, might be ignored
+  -> LA.Vector Double -- dev, scale parameter, might be ignored
   -> Double
 logLikelihood od vW vY vMu vDev = VS.sum $ zipDist4
   od
@@ -191,7 +191,7 @@ aic
   -> LA.Vector Double
   -> LA.Vector Double
   -> LA.Vector Double
-  -> LA.Vector Double -- may be ignored
+  -> LA.Vector Double -- dev, may be ignored
   -> Double
 aic od vW vY vMu vDev =
   let nParam = case od of
@@ -205,10 +205,11 @@ aicR
   -> LA.Vector Double
   -> LA.Vector Double
   -> LA.Vector Double
-  -> Double -- may be ignored
+  -> Double -- may be ignored. When not ignored is assumed to be the sum of deviance residuals.  Like R.
   -> Double
-aicR od vW vY vMu dev =
-  let vDev   = VS.replicate (VS.length vW) dev
+aicR od vW vY vMu devResid =
+  let n      = VS.length vY
+      vDev   = VS.replicate n (devResid / realToFrac n)
       nParam = case od of
         Normal -> 1
         Gamma  -> 1
@@ -227,12 +228,12 @@ scaledVarianceOne DGamma        x = x * x
 
 scaledVariance
   :: ObservationsDistribution -> LA.Vector Double -> LA.Vector Double
-scaledVariance Normal    vMu = VS.map (scaledVarianceOne DNormal) vMu
-scaledVariance Bernoulli vMu = VS.map (scaledVarianceOne DBernoulli) vMu
 scaledVariance (Binomial vN) vMu =
   VS.zipWith (\n mu -> scaledVarianceOne (DBinomial n) mu) vN vMu
-scaledVariance Poisson vMu = VS.map (scaledVarianceOne DPoisson) vMu
-scaledVariance Gamma   vMu = VS.map (scaledVarianceOne DGamma) vMu
+scaledVariance Normal    vMu = VS.map (scaledVarianceOne DNormal) vMu
+scaledVariance Bernoulli vMu = VS.map (scaledVarianceOne DBernoulli) vMu
+scaledVariance Poisson   vMu = VS.map (scaledVarianceOne DPoisson) vMu
+scaledVariance Gamma     vMu = VS.map (scaledVarianceOne DGamma) vMu
 
 
 -- Numeric helpers 
