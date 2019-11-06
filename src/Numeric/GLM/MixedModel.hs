@@ -526,7 +526,7 @@ profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambd
         lambda = mkLambda vTh
         smZS   = smZ SLA.## lambda --(smT SLA.## smS)
 --        smZSt  = SLA.transpose smZS
-        os     = if (generalized glmm) then Optim_GLMM_Final else Optim_LMM
+
     P.logLE P.Diagnostic "Starting. Calling getCholeskySolutions."
     (cs@(CholeskySolutions smLth smRzx mRxx), betaU) <- getCholeskySolutions
       cf
@@ -547,6 +547,7 @@ profiledDeviance verbosity cf dt glmm reCalc@(RandomEffectCalculated smZ mkLambd
     let svb  = lambda SLA.#> (bu_svU betaU)
   --      vBetaU        = toDenseBetaU svBetaU
         vEta = denseLinearPredictor mX smZS betaU
+        os   = if (generalized glmm) then Optim_GLMM_Final else Optim_LMM
     (pd, rTheta2) <- profiledDeviance' verbosity
                                        dt
                                        glmm
@@ -643,7 +644,7 @@ profiledDeviance' pdv dt glmm re vTh os chol vEta svU =
               $ "In profiledDeviance': OptimizationStage was Optim_LMM in a GLMM call"
           Optim_GLMM_Halving -> return $ (devResidual + uDotu, rTheta2)
           Optim_GLMM_PIRLS   -> return $ (devResidual + uDotu, rTheta2)
-          Optim_GLMM_Final   -> return $ (aic + uDotu + logLth, rTheta2)
+          Optim_GLMM_Final   -> return $ (aic + uDotu + 2 * logLth, rTheta2)
     P.logLE P.Diagnostic $ "; pd=" <> (T.pack $ show pd)
     return (pd, rTheta2)
 
@@ -708,19 +709,20 @@ normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) (cholmodC, cholmodF, 
     P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
 -}
     let
-      vMu        = VS.map (GLM.invLink lf) vEta
-      vMuEta     = VS.map (GLM.derivInv lf) vEta
-      vYMinusMu  = vY - vMu
-      vWrkResids = VS.zipWith3 (\y mu muEta -> (y - mu) / muEta) vY vMu vMuEta
-      vWrkResp   = VS.zipWith (+) vEta vWrkResids
-      vWtWrkResp = VS.zipWith3
+      vMu         = VS.map (GLM.invLink lf) vEta
+      vMuEta      = VS.map (GLM.derivInv lf) vEta
+      vYMinusMu   = vY - vMu
+      vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVarW vY vMu
+      vWrkResids  = VS.zipWith3 (\y mu muEta -> (y - mu) / muEta) vY vMu vMuEta
+      vWrkResp    = VS.zipWith (+) vEta vWrkResids
+      vWtWrkResp  = VS.zipWith3
         (\wt muEta wrkResp -> muEta * (sqrt wt) * wrkResp)
         vVarW
         vMuEta
         vWrkResp
-      vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVarW vY vMu
-      vZ          = VS.zipWith (*) vMuEta vWtYMinusMu
-      vX          = vYMinusMu
+
+      vZ = VS.zipWith (*) vMuEta vWtYMinusMu
+      vX = vWtYMinusMu
     P.logLE P.Diagnostic
       $  "vWtYminusMu="
       <> (T.pack $ show vWtYMinusMu)
@@ -963,24 +965,26 @@ spUV (LMM (MixedModel (RegressionModel _ mX vY) _) _) (RandomEffectCalculated sm
   = (smZ SLA.#~# mkLambda vTh, mX)
 
 spUV glmm@(GLMM (MixedModel (RegressionModel _ mX _) _) vW _ _) (RandomEffectCalculated smZ mkLambda) vTh vEta
-  = let smZS      = smZ SLA.## mkLambda vTh
-        vWdMudEta = weights glmm vW vEta
-        mWdMudEta = LA.diag vWdMudEta
-        smU       = SD.toSparseMatrix mWdMudEta SLA.## smZS
-        mV        = mWdMudEta LA.<> mX
+  = let smZS = smZ SLA.## mkLambda vTh
+        vWUV = weightsForUV glmm vW vEta
+        mWUV = LA.diag vWUV
+        smU  = SD.toSparseMatrix mWUV SLA.## smZS
+        mV   = mWUV LA.<> mX
     in  (smU, mV)
 
 type ZStarMatrix = SLA.SpMatrix Double
 
 -- glmer: sqrtWrkWt
-weights
+weightsForUV
   :: GeneralizedLinearMixedModel b g -> WMatrix -> LinearPredictor -> WMatrix
-weights glmm vW vEta =
+weightsForUV glmm vW vEta =
   let lf        = GLM.linkFunction $ linkFunctionType glmm
       vMu       = VS.map (GLM.invLink lf) vEta
       vdMudEta  = VS.map (GLM.derivInv lf) vEta
       vVariance = GLM.scaledVariance (observationDistribution glmm) vMu
-  in  VS.zipWith3 (\w muEta var -> muEta * sqrt (w / var)) vW vdMudEta vVariance
+      vVSW = GLM.varianceScaledWeights (observationDistribution glmm) vW vMu --    
+  in  VS.zipWith (\muEta vsw -> muEta * sqrt vsw) vdMudEta vVSW
+--    VS.zipWith3 (\w muEta var -> muEta * sqrt (w / var)) vW vdMudEta vVariance
 
 compute_dBetaU
   :: EffectsIO r

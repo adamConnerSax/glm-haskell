@@ -69,9 +69,8 @@ data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
 -- mu is the conditional mean of the linear predictor after mapping via the link function
 familyWeights
   :: ObservationsDistribution -> LA.Vector Double -> LA.Vector Double
-familyWeights (Binomial vN) vW =
-  let f w n = w * realToFrac n in VS.zipWith f vW vN
-familyWeights _ vW = vW
+familyWeights (Binomial vN) vW = VS.zipWith (\w n -> w * realToFrac n) vW vN
+familyWeights _             vW = vW
 
 varianceScaledWeights
   :: ObservationsDistribution
@@ -222,7 +221,7 @@ aicR od vW vY vMu devResid =
 scaledVarianceOne :: ObservationDistribution -> Double -> Double
 scaledVarianceOne DNormal       _ = 1
 scaledVarianceOne DBernoulli    x = x * (1 - x)
-scaledVarianceOne (DBinomial n) x = realToFrac n * x * (1 - x) -- not sure about n here
+scaledVarianceOne (DBinomial _) x = x * (1 - x) -- not sure about n here
 scaledVarianceOne DPoisson      x = x
 scaledVarianceOne DGamma        x = x * x
 
