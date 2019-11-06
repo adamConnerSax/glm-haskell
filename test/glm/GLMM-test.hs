@@ -58,7 +58,7 @@ main = do
   let glmmControls = GLMMControls (LMMControls LMM_NELDERMEAD)
                                   GLM.UseCanonical
                                   10
-                                  (ConvergeSimple 0.05 20)
+                                  (ConvergeDeviance 1e-9 30)
 
 {-
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
@@ -123,7 +123,7 @@ main = do
       vN = LA.fromList $ fmap (F.rgetField @Size) $ FL.fold FL.list frame
       asGLMM mm = GLMM mm vW (GLM.Binomial vN) glmmControls
 
-  resultEither <- runEffectsIO $ do
+  resultEither <- runEffectsVerboseIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
                         fixedEffects
