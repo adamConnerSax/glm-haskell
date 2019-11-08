@@ -42,6 +42,8 @@ import           System.IO                      ( hSetBuffering
 
 verbose = False
 
+runFIO = if verbose then runEffectsVerboseIO else runEffectsIO
+
 throwEither :: (P.Member (P.Error GLMError) r) => Either GLMError a -> P.Sem r a
 throwEither x = case x of
   Left  e -> P.throw e
@@ -125,7 +127,7 @@ main = do
     asGLMM lmms = GeneralizedLinearMixedModel
       (GeneralizedLinearMixedModelSpec lmms vW (GLM.Binomial vN) glmmControls)
 
-  resultEither <- runEffectsIO $ do
+  resultEither <- runFIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
                         fixedEffects
