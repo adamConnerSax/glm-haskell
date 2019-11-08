@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 79a558d9f0c9267939148991279110a659032e699eb01c3665461ac5b3c37973
+-- hash: 09dfa3805ab5ac985f5b0b4761f823e416620d882eb9da28552595cbc30936c0
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -69,7 +69,7 @@ library
     , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
     , hcholmod >=0.1.0 && <0.2
-    , hmatrix >=0.20.0 && <0.21
+    , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , knit-haskell >=0.7.0 && <0.8
     , math-functions >=0.3.0 && <0.4
@@ -118,7 +118,7 @@ test-suite CHOLMOD-test
     , foldl >=1.4.0 && <=1.5
     , glm-haskell
     , hcholmod
-    , hmatrix >=0.20.0 && <0.21
+    , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , knit-haskell >=0.7.0 && <0.8
     , math-functions >=0.3.0 && <0.4
@@ -155,7 +155,7 @@ test-suite GLMM-test
     , foldl >=1.4.0 && <=1.5
     , glm-haskell
     , hcholmod >=0.1.0 && <0.2
-    , hmatrix >=0.20.0 && <0.21
+    , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , knit-haskell >=0.7.0 && <0.8
     , math-functions >=0.3.0 && <0.4
@@ -195,7 +195,7 @@ test-suite LMM-test
     , foldl >=1.4.0 && <=1.5
     , glm-haskell
     , hcholmod >=0.1.0 && <0.2
-    , hmatrix >=0.20.0 && <0.21
+    , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , knit-haskell >=0.7.0 && <0.8
     , math-functions >=0.3.0 && <0.4

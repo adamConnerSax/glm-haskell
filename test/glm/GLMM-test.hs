@@ -55,7 +55,7 @@ main = do
   hSetBuffering stdout NoBuffering
   let lmmControls = LMMControls LMM_BOBYQA --defaultLMMControls
 
-  let glmmControls = GLMMControls (LMMControls LMM_NELDERMEAD)
+  let glmmControls = GLMMControls (LMMControls LMM_BOBYQA)
                                   GLM.UseCanonical
                                   10
                                   (ConvergeDeviance 1e-9 30)
@@ -123,7 +123,7 @@ main = do
       vN = LA.fromList $ fmap (F.rgetField @Size) $ FL.fold FL.list frame
       asGLMM mm = GLMM mm vW (GLM.Binomial vN) glmmControls
 
-  resultEither <- runEffectsVerboseIO $ do
+  resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
           (lmePrepFrame getObservation
                         fixedEffects
