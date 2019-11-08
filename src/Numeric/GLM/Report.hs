@@ -55,15 +55,15 @@ eitherToSem = either (P.throw . GLM.OtherGLMError) return
 
 fixedEffectStatistics
   :: (Ord b, Enum b, Bounded b)
-  => GLM.GeneralizedLinearMixedModel b g --GLM.FixedEffects b
+  => GLM.MixedModel b g --GLM.FixedEffects b
   -> Double
   -> GLM.CholeskySolutions
   -> GLM.BetaU
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics glmm sigma2 (GLM.CholeskySolutions _ _ mRX) (GLM.BetaU vBeta _)
+fixedEffectStatistics mm sigma2 (GLM.CholeskySolutions _ _ mRX) (GLM.BetaU vBeta _)
   = let means     = vBeta
-        (GLM.MixedModel (GLM.RegressionModel fe _ _) _) = GLM.mixedModel glmm
-        effSigma2 = case GLM.observationDistribution glmm of
+        fe        = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
+        effSigma2 = case GLM.observationDistribution mm of
           GLM.Normal -> sigma2
           _          -> 1
         covs = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
@@ -99,13 +99,13 @@ effectParametersByGroup rc ebg vb = do
 effectCovariancesByGroup
   :: (Ord g, Show g, Enum b, Bounded b, Show b, GLM.Effects r)
   => GLM.EffectsByGroup g b
-  -> GLM.GeneralizedLinearMixedModel b g
+  -> GLM.MixedModel b g
   -> Double
   -> LA.Vector Double
   -> P.Sem r (GLM.EffectCovariancesByGroup g b)
-effectCovariancesByGroup ebg glmm sigma2 vTh = do
+effectCovariancesByGroup ebg mm sigma2 vTh = do
   let
-    effSigma2 = case GLM.observationDistribution glmm of
+    effSigma2 = case GLM.observationDistribution mm of
       GLM.Normal -> sigma2
       _          -> 1
     groups = M.keys ebg
@@ -131,17 +131,19 @@ effectCovariancesByGroup ebg glmm sigma2 vTh = do
 
 report
   :: (LA.Container LA.Vector Double, GLM.EffectsIO r)
-  => GLM.GeneralizedLinearMixedModel b g
+  => GLM.MixedModel b g
   -> SLA.SpMatrix Double -- ^ smZ
   -> GLM.BetaVec -- ^ beta
   -> SLA.SpVector Double -- ^ b
   -> P.Sem r ()
-report glmm smZ vBeta svb = do
+report mm smZ vBeta svb = do
   let
-    GLM.MixedModel (GLM.RegressionModel _ mX vY) groupFSM = GLM.mixedModel glmm
-    (_, p) = LA.size mX
-    (_, q) = SLA.dim smZ
-    vb     = SD.toDenseVector svb
+    mX       = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+    vY       = GLM.rmsObservations $ GLM.regressionModelSpec mm
+    groupFSM = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
+    (_, p)   = LA.size mX
+    (_, q)   = SLA.dim smZ
+    vb       = SD.toDenseVector svb
     reportStats prefix v = do
       let mean = meanV v
           var =
@@ -178,7 +180,7 @@ report glmm smZ vBeta svb = do
 -- like "fitted" in lme4
 fitted
   :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
-  => GLM.GeneralizedLinearMixedModel b g
+  => GLM.MixedModel b g
   -> (q -> b -> Double)
   -> (q -> g -> T.Text)
   -> GLM.FixedEffectStatistics b
@@ -186,10 +188,10 @@ fitted
   -> GLM.RowClassifier g
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted glmm getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
+fitted mm getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
   = do
     let
-      invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType glmm
+      invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
       applyEffect b e q = case b of
         GLM.Intercept   -> e
         GLM.Predictor b -> e * getPred q b
