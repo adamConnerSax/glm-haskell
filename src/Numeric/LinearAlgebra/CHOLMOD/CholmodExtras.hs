@@ -13,6 +13,8 @@ module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   , spMatrixCholesky
   , unsafeSpMatrixCholesky
   , spMatrixFactorize
+  , CholmodFactorizationStyle (..)
+  , spMatrixFactorizeP
   , unsafeSpMatrixFactorize
   , factorPermutation
   , factorPermutationSM
@@ -42,7 +44,9 @@ import Foreign hiding (free)
 import Foreign.C.Types
 import Foreign.C.String
 import Foreign.Storable (peek)
+import Foreign.Marshal.Alloc (alloca)
 import System.IO.Unsafe (unsafePerformIO)
+
 
 import           Control.Monad (when)
 import qualified Data.Text as T
@@ -55,7 +59,8 @@ import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFaceLow  (Common, Factor)
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodXFace as CH
 import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace  (allocCommon, startC)
 
-import qualified Data.Vector.Storable.Mutable as V
+import qualified Data.Vector.Storable.Mutable as MVS
+import qualified Data.Vector.Storable as VS
 
 data MatrixSymmetry = UnSymmetric | SquareSymmetricUpper | SquareSymmetricLower
 
@@ -211,6 +216,35 @@ spMatrixFactorize fpc fpf ms smX = do
     withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc
     withForeignPtr (CH.fPtr sparse) $ \ps -> CH.sparse_free ps pc
   return ()
+
+data CholmodFactorizationStyle = FactorizeA | FactorizeAtAPlusBetaI Double
+
+spMatrixFactorizeP :: ForeignPtr CH.Common -- ^ CHOLMOD environment
+                   -> ForeignPtr CH.Factor -- ^ result of CHOLMOD analysis
+                   -> CholmodFactorizationStyle
+                   -> MatrixSymmetry
+                   -> SLA.SpMatrix Double -- ^ matrix to decompose
+                   -> IO () -- ^ The factor in ForeignPtr Factor will be updated :(
+spMatrixFactorizeP fpc fpf cfs ms smX = do
+  triplet <- spMatrixToTriplet fpc ms smX
+  when debug $ printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
+  sparse <- CH.tripletToSparse triplet fpc
+  when debug $ printSparse (CH.fPtr sparse) "spMatrixCholesky" fpc
+  case cfs of
+    FactorizeA -> CH.factorize sparse fpf fpc
+    FactorizeAtAPlusBetaI x -> do
+      let (_, ncols) = SLA.dimSM smX
+          beta = [x,0]
+      withForeignPtr (CH.fPtr sparse) $ \pm -> do
+        alloca $ \pbeta -> do
+          pokeArray pbeta beta
+          factorize_p pm pbeta nullPtr 0 fpf fpc
+  withForeignPtr fpc $ \pc -> do
+    withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc
+    withForeignPtr (CH.fPtr sparse) $ \ps -> CH.sparse_free ps pc
+  return ()
+
+
   
 -- |  compute the lower-triangular Cholesky factor using the given analysis stored in Factor
 -- the matrix given here must have the same pattern of non-zeroes as the one used for the
@@ -242,19 +276,19 @@ unsafeSolveSparse :: ForeignPtr CH.Common -- ^ CHOLMOD environment
 unsafeSolveSparse fpc fpf ss smB = unsafePerformIO $ solveSparse fpc fpf ss smB
 {-# NOINLINE unsafeSolveSparse #-}
   
-factorPermutation :: ForeignPtr CH.Factor -> IO (V.MVector s CInt)
+factorPermutation :: ForeignPtr CH.Factor -> IO (VS.MVector s CInt)
 factorPermutation ffp = withForeignPtr ffp $ \fp -> do
   n <- factorN_L fp :: IO CSize
   pi <- factorPermutationL fp :: IO (Ptr CInt)
   pifp <- newForeignPtr_ pi :: IO (ForeignPtr CInt)
-  return $ V.unsafeFromForeignPtr0 pifp (fromIntegral n)
+  return $ MVS.unsafeFromForeignPtr0 pifp (fromIntegral n)
 
 -- | retrieve the factor permutation as an SpMatrix
 factorPermutationSM :: Num a => ForeignPtr CH.Factor -> IO (SLA.SpMatrix a)
 factorPermutationSM ffp = do
   permMV <- factorPermutation ffp
   permL <- readv permMV
-  return $ SLA.permutationSM (V.length permMV) (fmap fromIntegral permL)
+  return $ SLA.permutationSM (MVS.length permMV) (fmap fromIntegral permL)
 
 unsafeFactorPermutationSM :: Num a => ForeignPtr CH.Factor -> SLA.SpMatrix a
 unsafeFactorPermutationSM = unsafePerformIO . factorPermutationSM
@@ -289,9 +323,9 @@ tripletToSpMatrix pTriplet = do
   colIndicesFP <- newForeignPtr_ colIndicesP
   valsP <- CH.triplet_get_x pTriplet  :: IO (Ptr CDouble)
   valsFP <- newForeignPtr_ valsP
-  rowIndices <- readv (V.unsafeFromForeignPtr0 rowIndicesFP (fromIntegral nZmax))
-  colIndices <- readv (V.unsafeFromForeignPtr0 colIndicesFP (fromIntegral nZmax))
-  vals <- readv (V.unsafeFromForeignPtr0 valsFP (fromIntegral nZmax))
+  rowIndices <- readv (MVS.unsafeFromForeignPtr0 rowIndicesFP (fromIntegral nZmax))
+  colIndices <- readv (MVS.unsafeFromForeignPtr0 colIndicesFP (fromIntegral nZmax))
+  vals <- readv (MVS.unsafeFromForeignPtr0 valsFP (fromIntegral nZmax))
   let triplets = zip3 (fmap fromIntegral rowIndices) (fmap fromIntegral colIndices) (fmap realToFrac vals)
       sm = SLA.fromListSM (fromIntegral nRows, fromIntegral nCols) triplets
   when debug $ SLA.prd sm    
@@ -344,17 +378,20 @@ printSparse' ps t fpc = do
     tSC <- newCString (T.unpack t)
     printSparseL ps tSC pc
 
-    
-
 setFinalLL :: Int -> ForeignPtr CH.Common -> IO ()
 setFinalLL n fpc = withForeignPtr fpc $ \pc -> setFinalLLL n pc
 
-readv :: V.Storable a => V.IOVector a -> IO [a]
-readv v = sequence [ V.read v i | i <- [0 .. (V.length v) - 1] ]
+factorize_p :: Ptr CH.Sparse -> Ptr Double -> Ptr CInt -> CSize -> ForeignPtr Factor -> ForeignPtr Common -> IO ()
+factorize_p ps pb i s fpf fpc = do
+  withForeignPtr fpc $ \pc -> do
+    withForeignPtr fpf $ \pf -> factorize_pL ps pb i s pf pc
+      
+readv :: MVS.Storable a => MVS.IOVector a -> IO [a]
+readv v = sequence [ MVS.read v i | i <- [0 .. (MVS.length v) - 1] ]
 
-writev :: (Storable a) => V.IOVector a -> [a] -> IO ()
+writev :: MVS.Storable a => MVS.IOVector a -> [a] -> IO ()
 writev v xs =
-  sequence_ [ V.write v i x | (i, x) <- zip [0 .. (Prelude.length xs - 1)] xs ]
+  sequence_ [ MVS.write v i x | (i, x) <- zip [0 .. (Prelude.length xs - 1)] xs ]
 
 -- | the N of the N x N factor
 foreign import ccall unsafe "cholmod_extras.h cholmod_factor_n"
@@ -393,6 +430,9 @@ foreign import ccall unsafe "cholmod.h cholmod_print_triplet"
 
 foreign import ccall unsafe "cholmod.h cholmod_print_sparse"
   printSparseL :: Ptr CH.Sparse -> CString -> Ptr CH.Common -> IO ()
+
+foreign import ccall unsafe "cholmod.h cholmod_factorize_p"
+  factorize_pL :: Ptr CH.Sparse -> Ptr Double -> Ptr CInt -> CSize -> Ptr Factor -> Ptr Common -> IO ()
 
 
 

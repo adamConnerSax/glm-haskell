@@ -528,8 +528,11 @@ makeLambda groupFSM =
       allDiags vTh = concat $ fmap perGroup $ blockData vTh
   in  (\vTh -> SLA.fromBlocksDiag (allDiags vTh))
 
+xTx :: SLA.SpMatrix Double -> SLA.SpMatrix Double
+xTx smX = (smX SLA.#^# smX)
+
 xTxPlusI :: SLA.SpMatrix Double -> SLA.SpMatrix Double
-xTxPlusI smX = (smX SLA.#~^# smX) SLA.^+^ (SLA.eye $ SLA.ncols smX)
+xTxPlusI smX = (smX SLA.#^# smX) SLA.^+^ (SLA.eye $ SLA.ncols smX)
 
 logDetTriangularSM :: RealFloat a => SLA.SpMatrix a -> a
 logDetTriangularSM smX =
@@ -557,7 +560,7 @@ cholmodAnalyzeProblem reCalc = do
   (cholmodF, smP) <-
     liftIO
     $ CH.spMatrixAnalyzeWP cholmodC CH.SquareSymmetricLower
-    $ xTxPlusI
+    $ xTx
     $ recModelMatrix reCalc
 --  liftIO $ CH.printFactor cholmodF "After analyze, before factorize" cholmodC
 --  liftIO $ putStrLn "smP=" >> (LA.disp 1 $ SD.toDenseMatrix smP)
@@ -595,7 +598,6 @@ profiledDeviance verbosity cf dt mm reCalc os vTh =
         (_, p) = LA.size mX
         (_, q) = SLA.dim smZ
         smZS   = makeZS reCalc vTh
---        smZSt  = SLA.transpose smZS
 
     P.logLE P.Diagnostic "Starting. Calling getCholeskySolutions."
     (cs@(CholeskySolutions smLth smRzx mRxx), betaU) <- getCholeskySolutions
@@ -616,7 +618,6 @@ profiledDeviance verbosity cf dt mm reCalc os vTh =
       putStrLn "Rxx"
       LA.disp 2 mRxx
     let svb     = lambda SLA.#> (bu_svU betaU)
-  --      vBetaU        = toDenseBetaU svBetaU
         vEta    = denseLinearPredictor mX smZS betaU
         osFinal = if (generalized mm) then Optim_GLMM_Final else Optim_LMM
     (pd, rTheta2) <- profiledDeviance' verbosity
@@ -646,8 +647,6 @@ profiledDeviance verbosity cf dt mm reCalc os vTh =
     when (verbosity == PDVAll || verbosity == PDVSimple) $ liftIO $ do
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
     return (pd, sigma2, betaU, svb, cs)
-
-
 
 profiledDeviance'
   :: EffectsIO r
@@ -1076,13 +1075,13 @@ spUV mm@(LinearMixedModel _) reCalc vTh _ =
   in  (smZ SLA.#~# mkLambda vTh, mX)
 
 spUV mm@(GeneralizedLinearMixedModel glmmSpec) reCalc vTh vEta =
-  let mX   = rmsFixedPredictors $ regressionModelSpec mm
-      vW   = glmmsWeights glmmSpec
-      smZS = makeZS reCalc vTh
-      vWUV = weightsForUV mm vW vEta
-      mWUV = LA.diag vWUV
-      smU  = SD.toSparseMatrix mWUV SLA.## smZS
-      mV   = mWUV LA.<> mX
+  let mX    = rmsFixedPredictors $ regressionModelSpec mm
+      vW    = glmmsWeights glmmSpec
+      smZS  = makeZS reCalc vTh
+      vWUV  = weightsForUV mm vW vEta
+      smWUV = SLA.mkDiagonal (VS.length vWUV) $ VS.toList vWUV
+      smU   = smWUV SLA.## smZS
+      mV    = (LA.diag vWUV) LA.<> mX
   in  (smU, mV)
 
 type ZStarMatrix = SLA.SpMatrix Double
@@ -1234,11 +1233,20 @@ cholmodCholeskySolutions' cholmodFactor smU mV nes mixedModelSpec =
     -- Cholesky factorize to get L_theta *and* update factor for solving with it
     P.logLE P.Diagnostic "Starting..."
     -- TODO: Cholmod has built in support for factorizing XtX + a * I.  Use it.
+    let cfs = CH.FactorizeAtAPlusBetaI 1
+    liftIO $ CH.spMatrixFactorizeP cholmodC
+                                   cholmodF
+                                   cfs
+                                   CH.UnSymmetric
+                                   (SLA.transpose smU)
+{-
+    let cfs = CH.FactorizeA
     liftIO
-      $ CH.spMatrixFactorize cholmodC cholmodF CH.SquareSymmetricLower
+      $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.SquareSymmetricLower
       $ SLA.filterSM lowerTriangular
       $ xTxPlusI
       $ smU
+-}
 --    P.logLE P.Diagnostic "After factorize..."
     -- compute Rzx
 --    P.logLE P.Diagnostic "Calling normal equations."
