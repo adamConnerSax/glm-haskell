@@ -9,6 +9,7 @@ module Main where
 
 import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.ProblemTypes      as GLM
+import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Report            as GLM
@@ -44,23 +45,25 @@ verbose = False
 
 runFIO = if verbose then runEffectsVerboseIO else runEffectsIO
 
-throwEither :: (P.Member (P.Error GLMError) r) => Either GLMError a -> P.Sem r a
+throwEither
+  :: (P.Member (P.Error GLM.GLMError) r) => Either GLM.GLMError a -> P.Sem r a
 throwEither x = case x of
   Left  e -> P.throw e
   Right x -> return x
 
-throwMaybe :: (P.Member (P.Error GLMError) r) => T.Text -> Maybe a -> P.Sem r a
-throwMaybe msg x = throwEither $ maybe (Left $ OtherGLMError $ msg) Right x
+throwMaybe
+  :: (P.Member (P.Error GLM.GLMError) r) => T.Text -> Maybe a -> P.Sem r a
+throwMaybe msg x = throwEither $ maybe (Left $ GLM.OtherGLMError $ msg) Right x
 
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
-  let lmmControls = LMMControls LMM_BOBYQA 1e-6 --defaultLMMControls
+  let lmmControls = GLM.LMMControls GLM.LMM_BOBYQA 1e-6 --defaultLMMControls
 
-  let glmmControls = GLMMControls
+  let glmmControls = GLM.GLMMControls
         GLM.UseCanonical
         10
-        (PIRLSConvergenceCriterion PCT_Deviance 1e-9 30)
+        (GLM.PIRLSConvergenceCriterion GLM.PCT_Deviance 1e-9 30)
 
 {-
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
@@ -124,8 +127,12 @@ main = do
     effectsByGroup = M.fromList [(CbppHerd, IS.fromList [GLM.Intercept])]
     vW             = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
     vN = LA.fromList $ fmap (F.rgetField @Size) $ FL.fold FL.list frame
-    asGLMM lmms = GeneralizedLinearMixedModel
-      (GeneralizedLinearMixedModelSpec lmms vW (GLM.Binomial vN) glmmControls)
+    asGLMM lmms = GLM.GeneralizedLinearMixedModel
+      (GLM.GeneralizedLinearMixedModelSpec lmms
+                                           vW
+                                           (GLM.Binomial vN)
+                                           glmmControls
+      )
 
   resultEither <- runFIO $ do
     let (vY, mX, rcM) = FL.fold
@@ -136,15 +143,17 @@ main = do
                         groupLabels
           )
           frame
-    rowClassifier  <- throwEither $ either (Left . OtherGLMError) Right rcM
-    fitSpecByGroup <- fitSpecByGroup fixedEffects effectsByGroup rowClassifier
+    rowClassifier  <- throwEither $ either (Left . GLM.OtherGLMError) Right rcM
+    fitSpecByGroup <- GLM.fitSpecByGroup fixedEffects
+                                         effectsByGroup
+                                         rowClassifier
     let (n, p) = LA.size mX
         rcRows = VB.length $ GLM.rowInfos rowClassifier
     when verbose $ liftIO $ do
       putStrLn $ "classifiers=" ++ show rowClassifier
     when (rcRows /= n)
       $  P.throw
-      $  OtherGLMError
+      $  GLM.OtherGLMError
       $  "Only "
       <> (T.pack $ show rcRows)
       <> " in vRC but there are "
@@ -161,10 +170,12 @@ main = do
     let
       mkLambda = makeLambda fitSpecByGroup
       (_, q)   = SLA.dim smZ
-      lmms     = LinearMixedModelSpec
-        (MixedModelSpec (RegressionModelSpec fixedEffects mX vY) fitSpecByGroup)
+      lmms     = GLM.LinearMixedModelSpec
+        (GLM.MixedModelSpec (GLM.RegressionModelSpec fixedEffects mX vY)
+                            fitSpecByGroup
+        )
         lmmControls
-      randomEffectCalc = RandomEffectCalculated smZ mkLambda
+      randomEffectCalc = GLM.RandomEffectCalculated smZ mkLambda
       th0              = setCovarianceVector fitSpecByGroup 1 0 -- LA.fromList [2, 2]
     when verbose $ liftIO $ do
       putStrLn $ "Z="
@@ -212,10 +223,10 @@ main = do
       minimizeDeviance mdVerbosity ML mm randomEffectCalc th0
     liftIO $ do
       putStrLn $ "deviance=" ++ show pd2_GLMM
-      putStrLn $ "beta=" ++ show (bu_vBeta vBetaU2_GLMM)
-      putStrLn $ "u=" ++ show (bu_svU vBetaU2_GLMM)
+      putStrLn $ "beta=" ++ show (GLM.bu_vBeta vBetaU2_GLMM)
+      putStrLn $ "u=" ++ show (GLM.bu_svU vBetaU2_GLMM)
       putStrLn $ "b=" ++ show vb2_GLMM
-    GLM.report mm smZ (bu_vBeta vBetaU2_GLMM) (SD.toSparseVector vb2_GLMM)
+    GLM.report mm smZ (GLM.bu_vBeta vBetaU2_GLMM) (SD.toSparseVector vb2_GLMM)
     let fes_GLMM =
           GLM.fixedEffectStatistics mm sigma2_GLMM cs_GLMM vBetaU2_GLMM
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_GLMM

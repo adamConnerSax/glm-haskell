@@ -9,6 +9,7 @@ module Main where
 
 import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.ProblemTypes      as GLM
+import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Report            as GLM
