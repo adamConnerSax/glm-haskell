@@ -211,6 +211,32 @@ fitted mm getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifie
     return $ invLinkF $ fixedEffects + FL.fold FL.sum groupEffects
 
 
+-- reports for fixed Effects
+-- first a table of intercept/predictor vs. coefficient and variance
+colFixedEffects :: Show b => C.Colonnade C.Headed (b, Double, Double) T.Text
+colFixedEffects =
+  let eff (b, _, _) = b
+      mean (_, m, _) = m
+      var (_, _, v) = v
+  in  C.headed "Effect" (T.pack . show . eff)
+      <> C.headed "Parameter" (T.pack . show . mean)
+      <> C.headed "Std. Dev" (T.pack . show . sqrt . var)
+
+printFixedEffects
+  :: (Show b, Enum b, Ord b, Bounded b) => GLM.FixedEffectStatistics b -> T.Text
+printFixedEffects (GLM.FixedEffectStatistics fes means covars) =
+  let fromEff fe =
+        let index = fromEnum fe
+        in  (fe, means `LA.atIndex` index, covars `LA.atIndex` (index, index))
+      effList = IS.toList $ GLM.indexedFixedEffectSet fes
+      rows    = fmap fromEff effList
+  in  T.pack $ C.ascii (fmap T.unpack $ colFixedEffects) rows
+
+
+-- and a function to produce "predictions" from a given set of FE predictors
+-- this so we can make a table reflecting the fixed-effects 
+
+
 -- Like "ranef" in lme4
 randomEffectsByLabel
   :: (Ord g, Show g, Show b, Enum b, Bounded b, GLM.Effects r)
@@ -253,3 +279,4 @@ printRandomEffectsByLabel rebg =
           <> (T.pack $ C.ascii (fmap T.unpack $ colRandomEffectsByLabel ies) x)
           <> "\n"
   in  mconcat $ fmap printOne $ M.toList rebg
+
