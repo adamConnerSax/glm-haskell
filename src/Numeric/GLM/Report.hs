@@ -232,10 +232,48 @@ printFixedEffects (GLM.FixedEffectStatistics fes means covars) =
       rows    = fmap fromEff effList
   in  T.pack $ C.ascii (fmap T.unpack $ colFixedEffects) rows
 
-
 -- and a function to produce "predictions" from a given set of FE predictors
--- this so we can make a table reflecting the fixed-effects 
+-- this so we can make a table reflecting the fixed-effects
 
+predict
+  :: (GLM.Effects r, Ord g, Show g, Show b, Enum b, Bounded b)
+  => GLM.FixedEffectStatistics b -- fixed effects parameters
+  -> GLM.EffectParametersByGroup g b -- group/random effects
+  -> Map b Double -- fixed effect values to plug in
+  -> Map g Text -- optional group membership
+  -> P.Sem r (Double, Double)
+predict (GLM.FixedEffectStatistics fes means _) (GLM.EffectParametersByGroup epg) feMap groupMap
+  = do
+  -- What follows is in the Either monad
+    let effList = IS.toList $ GLM.indexedFixedEffectSet fes
+    when (L.sort effList /= L.sort (M.keys feMap))
+      $  P.throw
+      $  GLM.OtherGLMError
+      $  "Mismatch in modeled effects ("
+      <> (T.pack $ show effList)
+      <> " and given values "
+      <> (T.pack $ show feMap)
+    when (not $ L.sort (M.keys groupMap) `L.isSubsequenceOf` L.sort (keys epg))
+      $  P.throw
+      $  GLM.OtherGLMError
+      $  "Mismatch in modeled groups ("
+      <> (T.pack $ show $ M.keys eps)
+      <> ") and given membership ("
+      <> (T.pack $ show groupMap)
+    -- fixed effects
+    let
+      applyCoeff (fe, val) = do
+        feIndex <-
+          maybe
+              (  P.throw
+              $  (T.pack $ show fe)
+              <> " not found in "
+              <> (T.pack $ show fes)
+              )
+              return
+            $ IS.index fe
+        return $ means `LA.atIndex` feIndex
+    coeffMap <- traverse getFECoeff
 
 -- Like "ranef" in lme4
 randomEffectsByLabel
