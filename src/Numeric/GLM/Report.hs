@@ -176,6 +176,104 @@ report mm smZ vBeta svb = do
     numberedGroups
 
 
+predict
+  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  => GLM.MixedModel b g
+  -> (b -> Maybe Double)
+  -> (g -> Maybe T.Text)
+  -> GLM.FixedEffectStatistics b
+  -> GLM.EffectParametersByGroup g b
+  -> GLM.RowClassifier g
+  -> P.Sem r (Double, Double) -- (prediction, link (prediction))
+predict mm getPredictorM getLabelM (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier
+  = do
+    let
+      invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
+      applyEffectE msgF b e = case b of
+        GLM.Intercept -> Right e
+        GLM.Predictor b ->
+          maybe (Left $ msgF b) Right $ fmap (e *) $ getPredictorM b
+      applyEffectsE msgF ies v =
+        fmap (FL.fold FL.sum)
+          $ traverse
+              (\(index, effect) ->
+                applyEffectE msgF effect (v `LA.atIndex` index)
+              )
+          $ IS.toIndexedList ies
+      groups = M.keys ebg
+      grpMsg g =
+        "Failed to find group label for \"" <> (T.pack $ show g) <> "\""
+      effMsgGroup g b =
+        "Failed to find predictor for effect \""
+          <> (T.pack $ show b)
+          <> "\" which is modeled in group \""
+          <> (T.pack $ show g)
+          <> "\".  This is a very weird error and should not happen. There should never be group effects which are not also fixed effects."
+      applyGroupEffects group = do
+        case getLabelM group of
+          Nothing    -> return 0 -- if we don't put in a group label, we assume 0 group effect
+          Just label -> do
+            labelIndex <- GLM.labelIndex rowClassifier group label
+            (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
+            applyEffectsE (effMsgGroup group)
+                          ies
+                          (LA.toRows mEP L.!! labelIndex)
+      effMsgFixed b =
+        "No predictor for fixed effect \"" <> (T.pack $ show b) <> "\""
+    fixedEffects <- eitherToSem
+      $ applyEffectsE effMsgFixed (GLM.indexedFixedEffectSet fe) vFE
+    groupEffects <- eitherToSem $ traverse applyGroupEffects $ M.keys ebg
+    let totalEffects = fixedEffects + FL.fold FL.sum groupEffects
+    return (invLinkF totalEffects, totalEffects)
+
+
+colPredictions
+  :: (Show b, Show g, Ord g)
+  => GLM.EffectParametersByGroup g b
+  -> (Double -> T.Text)
+  -> C.Colonnade C.Headed (T.Text, M.Map g T.Text, Double) T.Text
+colPredictions epgMap formatPrediction =
+  let label (l, _, _) = l
+      cats (_, c, _) = c
+      pred (_, _, p) = p
+      gLabel g = maybe "--" id . M.lookup g
+      makeGroupCol g = C.headed (T.pack $ show g) (gLabel g . cats)
+  in  C.headed "Category" label
+      <> mconcat (fmap makeGroupCol $ M.keys epgMap)
+      <> C.headed "Prediction" (formatPrediction . pred)
+
+printPredictions
+  :: ( Traversable f
+     , Ord g
+     , Show g
+     , Show b
+     , Ord b
+     , Enum b
+     , Bounded b
+     , GLM.Effects r
+     )
+  => GLM.MixedModel b g
+  -> GLM.FixedEffectStatistics b
+  -> GLM.EffectParametersByGroup g b
+  -> GLM.RowClassifier g
+  -> f (T.Text, M.Map b Double, M.Map g T.Text)
+  -> P.Sem r T.Text
+printPredictions mm fes epg rowClassifier labeledToPredict =
+  let f predMap gLabelMap =
+        fst
+          <$> predict mm
+                      (flip M.lookup predMap)
+                      (flip M.lookup gLabelMap)
+                      fes
+                      epg
+                      rowClassifier
+      makePrediction (l, predictors, groupLabels) = do
+        prediction <- f predictors groupLabels
+        return (l, groupLabels, prediction)
+  in  fmap
+        (T.pack . C.ascii (fmap T.unpack $ colPredictions epg (T.pack . show)))
+        (traverse makePrediction labeledToPredict)
+
 
 -- fitted values of input data
 -- like "fitted" in lme4
@@ -189,27 +287,14 @@ fitted
   -> GLM.RowClassifier g
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted mm getPred getLabel (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier row
-  = do
-    let
-      invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
-      applyEffect b e q = case b of
-        GLM.Intercept   -> e
-        GLM.Predictor b -> e * getPred q b
-      applyEffects ies v q =
-        FL.fold FL.sum
-          $ fmap
-              (\(index, effect) -> applyEffect effect (v `LA.atIndex` index) q)
-          $ IS.toIndexedList ies
-      groups = M.keys ebg
-      applyGroupEffects q group = do
-        labelIndex <- GLM.labelIndex rowClassifier group (getLabel q group)
-        (GLM.EffectParameters ies mEP) <- GLM.effectParameters group ebg
-        return $ applyEffects ies (LA.toRows mEP L.!! labelIndex) q
-      fixedEffects = applyEffects (GLM.indexedFixedEffectSet fe) vFE row
-    groupEffects <- eitherToSem $ traverse (applyGroupEffects row) $ M.keys ebg
-    return $ invLinkF $ fixedEffects + FL.fold FL.sum groupEffects
-
+fitted mm getPred getLabel fes ebg rowClassifier row =
+  fst
+    <$> predict mm
+                (Just . getPred row)
+                (Just . getLabel row)
+                fes
+                ebg
+                rowClassifier
 
 -- reports for fixed Effects
 -- first a table of intercept/predictor vs. coefficient and variance
@@ -223,57 +308,42 @@ colFixedEffects =
       <> C.headed "Std. Dev" (T.pack . show . sqrt . var)
 
 printFixedEffects
-  :: (Show b, Enum b, Ord b, Bounded b) => GLM.FixedEffectStatistics b -> T.Text
-printFixedEffects (GLM.FixedEffectStatistics fes means covars) =
-  let fromEff fe =
-        let index = fromEnum fe
-        in  (fe, means `LA.atIndex` index, covars `LA.atIndex` (index, index))
-      effList = IS.toList $ GLM.indexedFixedEffectSet fes
-      rows    = fmap fromEff effList
-  in  T.pack $ C.ascii (fmap T.unpack $ colFixedEffects) rows
+  :: (Show b, Enum b, Ord b, Bounded b, GLM.Effects r)
+  => GLM.FixedEffectStatistics b
+  -> P.Sem r T.Text
+printFixedEffects (GLM.FixedEffectStatistics fes means covars) = do
+  let
+    fromEff fe = eitherToSem $ do
+      index <-
+        maybe
+            (  Left
+            $  (T.pack $ show fe)
+            <> " not found in "
+            <> (T.pack $ show fes)
+            )
+            Right
+          $ IS.index (GLM.indexedFixedEffectSet fes) fe
+      return (fe, means `LA.atIndex` index, covars `LA.atIndex` (index, index))
+    effList = IS.toList $ GLM.indexedFixedEffectSet fes
+  rows <- traverse fromEff effList
+  return $ T.pack $ C.ascii (fmap T.unpack $ colFixedEffects) rows
 
 -- and a function to produce "predictions" from a given set of FE predictors
 -- this so we can make a table reflecting the fixed-effects
+{-
+getIndexed :: Show b => GLM.IndexedEffectSet b -> (Int -> a) -> b -> Maybe a
+getIndexed ies coeffF b = fmap coeffF (ies `index` b)
 
-predict
-  :: (GLM.Effects r, Ord g, Show g, Show b, Enum b, Bounded b)
-  => GLM.FixedEffectStatistics b -- fixed effects parameters
-  -> GLM.EffectParametersByGroup g b -- group/random effects
-  -> Map b Double -- fixed effect values to plug in
-  -> Map g Text -- optional group membership
-  -> P.Sem r (Double, Double)
-predict (GLM.FixedEffectStatistics fes means _) (GLM.EffectParametersByGroup epg) feMap groupMap
-  = do
-  -- What follows is in the Either monad
-    let effList = IS.toList $ GLM.indexedFixedEffectSet fes
-    when (L.sort effList /= L.sort (M.keys feMap))
-      $  P.throw
-      $  GLM.OtherGLMError
-      $  "Mismatch in modeled effects ("
-      <> (T.pack $ show effList)
-      <> " and given values "
-      <> (T.pack $ show feMap)
-    when (not $ L.sort (M.keys groupMap) `L.isSubsequenceOf` L.sort (keys epg))
-      $  P.throw
-      $  GLM.OtherGLMError
-      $  "Mismatch in modeled groups ("
-      <> (T.pack $ show $ M.keys eps)
-      <> ") and given membership ("
-      <> (T.pack $ show groupMap)
-    -- fixed effects
-    let
-      applyCoeff (fe, val) = do
-        feIndex <-
-          maybe
-              (  P.throw
-              $  (T.pack $ show fe)
-              <> " not found in "
-              <> (T.pack $ show fes)
-              )
-              return
-            $ IS.index fe
-        return $ means `LA.atIndex` feIndex
-    coeffMap <- traverse getFECoeff
+getIndexedE
+  :: Show b => GLM.IndexedEffectSet b -> (Int -> a) -> b -> Either T.Text a
+getIndexedE ies coeffF b = maybe (Left msg) Right (getIndexed ies coeffF b)
+ where
+  msg =
+    "Failed to find \""
+      <> (T.pack $ show b)
+      <> "\" in index="
+      <> (T.pack $ show ies)
+-}
 
 -- Like "ranef" in lme4
 randomEffectsByLabel
