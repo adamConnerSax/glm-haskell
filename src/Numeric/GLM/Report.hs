@@ -54,6 +54,16 @@ zTz is q x q, this is the part that will be sparse.
 eitherToSem :: GLM.Effects r => Either T.Text a -> P.Sem r a
 eitherToSem = either (P.throw . GLM.OtherGLMError) return
 
+fixedEffectParameters
+  :: (Ord b, Enum b, Bounded b)
+  => GLM.MixedModel b g --GLM.FixedEffects b
+  -> GLM.BetaU
+  -> GLM.FixedEffectParameters b
+fixedEffectParameters mm (GLM.BetaU vBeta _) =
+  let means = vBeta
+      fe    = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
+  in  GLM.FixedEffectParameters fe means
+
 fixedEffectStatistics
   :: (Ord b, Enum b, Bounded b)
   => GLM.MixedModel b g --GLM.FixedEffects b
@@ -61,14 +71,13 @@ fixedEffectStatistics
   -> GLM.CholeskySolutions
   -> GLM.BetaU
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics mm sigma2 (GLM.CholeskySolutions _ _ mRX) (GLM.BetaU vBeta _)
-  = let means     = vBeta
-        fe        = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
-        effSigma2 = case GLM.observationDistribution mm of
-          GLM.Normal -> sigma2
-          _          -> 1
-        covs = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
-    in  GLM.FixedEffectStatistics fe means covs
+fixedEffectStatistics mm sigma2 (GLM.CholeskySolutions _ _ mRX) betaU =
+  let fep       = fixedEffectParameters mm betaU
+      effSigma2 = case GLM.observationDistribution mm of
+        GLM.Normal -> sigma2
+        _          -> 1
+      covs = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
+  in  GLM.FixedEffectStatistics fep covs
 
 effectParametersByGroup
   :: (Ord g, Show g, Show b, GLM.Effects r)
@@ -181,11 +190,11 @@ predict
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
   -> (g -> Maybe T.Text)
-  -> GLM.FixedEffectStatistics b
+  -> GLM.FixedEffectParameters b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
   -> P.Sem r (Double, Double) -- (prediction, link (prediction))
-predict mm getPredictorM getLabelM (GLM.FixedEffectStatistics fe vFE _) ebg rowClassifier
+predict mm getPredictorM getLabelM (GLM.FixedEffectParameters fe vFE) ebg rowClassifier
   = do
     let
       invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
@@ -253,7 +262,7 @@ printPredictions
      , GLM.Effects r
      )
   => GLM.MixedModel b g
-  -> GLM.FixedEffectStatistics b
+  -> GLM.FixedEffectParameters b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
   -> f (T.Text, M.Map b Double, M.Map g T.Text)
@@ -282,7 +291,7 @@ fitted
   => GLM.MixedModel b g
   -> (q -> b -> Double)
   -> (q -> g -> T.Text)
-  -> GLM.FixedEffectStatistics b
+  -> GLM.FixedEffectParameters b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
   -> q
@@ -311,8 +320,9 @@ printFixedEffects
   :: (Show b, Enum b, Ord b, Bounded b, GLM.Effects r)
   => GLM.FixedEffectStatistics b
   -> P.Sem r T.Text
-printFixedEffects (GLM.FixedEffectStatistics fes means covars) = do
+printFixedEffects (GLM.FixedEffectStatistics fep covars) = do
   let
+    GLM.FixedEffectParameters fes means = fep
     fromEff fe = eitherToSem $ do
       index <-
         maybe

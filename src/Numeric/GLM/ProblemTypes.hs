@@ -20,6 +20,7 @@ module Numeric.GLM.ProblemTypes
   , groupEffects
   , categoryNumberFromRowIndex
   , categoryNumberFromLabel
+  , FixedEffectParameters(..)
   , FixedEffectStatistics(..)
   , GroupEffectCovariances(..)
   , EffectCovariancesByGroup
@@ -194,8 +195,12 @@ labelIndex rc group label = do
 
 -- types for storing results
 -- we fill this in at the end with the (mean) estimates and covariances
+data FixedEffectParameters b where
+  FixedEffectParameters :: FixedEffects b -> LA.Vector Double -> FixedEffectParameters b
+  deriving (Show)
+
 data FixedEffectStatistics b where
-  FixedEffectStatistics :: FixedEffects b -> LA.Vector Double -> LA.Matrix Double -> FixedEffectStatistics b
+  FixedEffectStatistics :: FixedEffectParameters b -> LA.Matrix Double -> FixedEffectStatistics b
   deriving (Show)
 
 data GroupEffectCovariances b where

@@ -131,13 +131,16 @@ minimizeDeviance
   -> GLM.CovarianceVec -- ^ initial guess for theta
   -> P.Sem
        r
-       ( GLM.CovarianceVec
-       , Double
-       , Double
-       , GLM.BetaU
+       ( ( GLM.CovarianceVec
+         , Double
+         , Double
+         , GLM.BetaU
+         , LA.Vector Double
+         , CholeskySolutions
+         )
        , LA.Vector Double
-       , CholeskySolutions
-       ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
+       , CholmodFactor
+       ) -- ^ ((theta, profiled_deviance, sigma2, (beta, u), b, Cholesky blocks), mu, Cholmod Analysis)
 minimizeDeviance verbosity dt mm reCalc th0 =
   P.wrapPrefix "minimizeDeviance" $ do
     P.logLE P.Diagnostic "Starting..."
@@ -146,6 +149,19 @@ minimizeDeviance verbosity dt mm reCalc th0 =
     P.logLE P.Diagnostic "Beginning Cholmod analysis of Z matrix structure."
     cholmodAnalysis <- cholmodAnalyzeProblem reCalc
     P.logLE P.Diagnostic "Finished Cholmod analysis of Z matrix structure."
+    res@(vTh, _, dev2, betaU, _, _) <- minimizeDevianceInner verbosity
+                                                             dt
+                                                             mm
+                                                             reCalc
+                                                             cholmodAnalysis
+                                                             th0
+    let
+      mX    = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+      zStar = GLM.makeZS reCalc vTh
+      vEta  = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
+      vMu = LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType mm)) vEta
+    return (res, vMu, cholmodAnalysis)
+{-    
     let
       pdv = case verbosity of
         MDVNone   -> PDVNone
@@ -205,6 +221,71 @@ minimizeDeviance verbosity dt mm reCalc th0 =
           <> (T.pack $ show thS)
         (pdVal, sigma2, betaU, svb, cs) <- pd finalOs thS
         return (thS, pdVal, sigma2, betaU, SD.toDenseVector svb, cs)
+-}
+
+minimizeDevianceInner
+  :: GLM.EffectsIO r
+  => MinimizeDevianceVerbosity
+  -> DevianceType
+  -> GLM.MixedModel b g
+  -> GLM.RandomEffectCalculated
+  -> CholmodFactor
+  -> GLM.CovarianceVec -- ^ initial guess for theta
+  -> P.Sem
+       r
+       ( GLM.CovarianceVec
+       , Double
+       , Double
+       , GLM.BetaU
+       , LA.Vector Double
+       , CholeskySolutions
+       ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
+minimizeDevianceInner verbosity dt mm reCalc cf th0 = do
+  let
+    pdv = case verbosity of
+      MDVNone   -> PDVNone
+      MDVSimple -> PDVSimple
+    (objectiveOs, finalOs) = if GLM.generalized mm
+      then (Optim_GLMM_PIRLS, Optim_GLMM_Final)
+      else (Optim_LMM, Optim_LMM)
+    pd
+      :: GLM.EffectsIO r
+      => OptimizationStage
+      -> GLM.CovarianceVec
+      -> P.Sem
+           r
+           ( Double
+           , Double
+           , GLM.BetaU
+           , SLA.SpVector Double
+           , CholeskySolutions
+           )
+    pd os x = profiledDeviance pdv cf dt mm reCalc os x
+    obj x =
+      unsafePerformEffects (fmap (\(d, _, _, _, _) -> d) $ pd objectiveOs x) 0
+    levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
+    thetaLB   = thetaLowerBounds levels
+    algorithm = (lmmOptimizerToNLOPT $ GLM.lmmOptimizer $ GLM.lmmControls mm)
+      obj
+      [thetaLB]
+      Nothing
+    stop =
+      NL.ObjectiveAbsoluteTolerance
+          (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)
+        NL.:| []
+    problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
+    eSol    = NL.minimizeLocal problem th0
+  case eSol of
+    Left result -> P.throw (GLM.OtherGLMError $ T.pack $ show result)
+    Right (NL.Solution pdS thS result) -> do
+      P.logLE P.Info
+        $  "Solution ("
+        <> (T.pack $ show result)
+        <> ") reached! At th="
+        <> (T.pack $ show thS)
+      (pdVal, sigma2, betaU, svb, cs) <- pd finalOs thS
+      return (thS, pdVal, sigma2, betaU, SD.toDenseVector svb, cs)
+
 
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
 thetaLowerBounds :: GLM.FitSpecByGroup g -> NL.Bounds

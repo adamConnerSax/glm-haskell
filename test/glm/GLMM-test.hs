@@ -12,6 +12,7 @@ import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
+import qualified Numeric.GLM.Bootstrap         as GLM
 import qualified Numeric.GLM.Report            as GLM
 
 import qualified Numeric.SparseDenseConversions
@@ -41,9 +42,11 @@ import           System.IO                      ( hSetBuffering
                                                 , BufferMode(..)
                                                 )
 
-verbose = False
+verbose = True
 
-runFIO = if verbose then runEffectsVerboseIO else runEffectsIO
+runFIO =
+  let runGLMEffects = if verbose then runEffectsVerboseIO else runEffectsIO
+  in  runGLMEffects . GLM.asyncToIOFinal . GLM.runRandomIO
 
 throwEither
   :: (P.Member (P.Error GLM.GLMError) r) => Either GLM.GLMError a -> P.Sem r a
@@ -184,7 +187,7 @@ main = do
 -- compare LMM and GLMM with ObservationDistribution set to Normal
 {-
     liftIO $ putStrLn "LMM"
-    (th2_LMM, pd2_LMM, sigma2_LMM, vBetaU2_LMM, vb2_LMM, cs_LMM) <-
+    ((th2_LMM, pd2_LMM, sigma2_LMM, vBetaU2_LMM, vb2_LMM, cs_LMM),_,_) <-
       minimizeDeviance mdVerbosity ML (asLMM mm) randomEffectCalc th0
     GLM.report (asLMM mm) smZ (bu_vBeta vBetaU2_LMM) (SD.toSparseVector vb2_LMM)
     let fes_LMM =
@@ -219,7 +222,7 @@ main = do
     liftIO $ putStrLn $ "GLMM"
     let mm = asGLMM lmms
     checkProblem mm randomEffectCalc
-    (th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM) <-
+    ((th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM), vMuSol, cf) <-
       minimizeDeviance mdVerbosity ML mm randomEffectCalc th0
     liftIO $ do
       putStrLn $ "deviance=" ++ show pd2_GLMM
@@ -227,7 +230,8 @@ main = do
       putStrLn $ "u=" ++ show (GLM.bu_svU vBetaU2_GLMM)
       putStrLn $ "b=" ++ show vb2_GLMM
     GLM.report mm smZ (GLM.bu_vBeta vBetaU2_GLMM) (SD.toSparseVector vb2_GLMM)
-    let fes_GLMM =
+    let fep_GLMM = GLM.fixedEffectParameters mm vBetaU2_GLMM
+        fes_GLMM =
           GLM.fixedEffectStatistics mm sigma2_GLMM cs_GLMM vBetaU2_GLMM
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_GLMM
     epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_GLMM
@@ -244,82 +248,27 @@ main = do
           fitted <- GLM.fitted mm
                                getPredictor
                                groupLabels
-                               fes_GLMM
+                               fep_GLMM
                                epg
                                rowClassifier
                                r
           return (obs, fitted)
     fitted <- traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
+    liftIO $ putStrLn $ "Boostrapping for confidence intervals"
+    bootstraps <- GLM.parametricBootstrap mdVerbosity
+                                          ML
+                                          mm
+                                          randomEffectCalc
+                                          cf
+                                          th2_GLMM
+                                          vMuSol
+                                          (sqrt sigma2_GLMM)
+                                          10
+                                          False
     liftIO $ putStrLn "Done"
 
-{-
-    (th2_ML, pd2_ML, sigma2_ML, vBetaU2_ML, vb2_ML, cs_ML) <- minimizeDeviance
-      mdVerbosity
-      ML
-      (glmm mm)
-      randomEffectCalc
-      th0
-    liftIO $ do
-      putStrLn $ "ML Via method 2"
-      putStrLn $ "deviance=" ++ show pd2_ML
-      putStrLn $ "beta=" ++ show (vBeta vBetaU2_ML)
-      putStrLn $ "u=" ++ show (svU vBetaU2_ML)
-      putStrLn $ "b=" ++ show vb2_ML
-    GLM.report (glmm mm) smZ (vBeta vBetaU2_ML) (SD.toSparseVector vb2_ML)
-    let fes_ML = GLM.fixedEffectStatistics (glmm mm) sigma2_ML cs_ML vBetaU2_ML
-    liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_ML
-    epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_ML
-    liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
-    gec <- GLM.effectCovariancesByGroup effectsByGroup
-                                        (glmm mm)
-                                        sigma2_ML
-                                        th2_ML
-    liftIO $ putStrLn $ "EffectCovariancesByGroup: " ++ show gec
-    rebl <- GLM.randomEffectsByLabel epg rowClassifier
-    liftIO
-      $  putStrLn
-      $  "Random Effects:\n"
-      ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
-    let f r = do
-          let obs = getObservation r
-          fitted <- GLM.fitted (glmm mm)
-                               getPredictor
-                               groupLabels
-                               fes_ML
-                               epg
-                               rowClassifier
-                               r
-          return (obs, fitted)
-    fitted <- traverse f (FL.fold FL.list frame)
-    liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
-    when (not $ generalized $ glmm mm) $ do
-      (th2_REML, pd2_REML, sigma2_REML, vBetaU2_REML, vb2_REML, cs_REML) <-
-        minimizeDeviance mdVerbosity REML (glmm mm) randomEffectCalc th0
-      liftIO $ do
-        putStrLn $ "REML Via method 2"
-        putStrLn $ "deviance=" ++ show pd2_REML
-        putStrLn $ "sigma=" ++ show (sqrt sigma2_REML)
-        putStrLn $ "beta=" ++ show (vBeta vBetaU2_REML)
-        putStrLn $ "u=" ++ show (svU vBetaU2_REML)
-        putStrLn $ "b=" ++ show vb2_REML
-      GLM.report (glmm mm) smZ (vBeta vBetaU2_REML) (SD.toSparseVector vb2_REML)
 
-    when verbose $ do
-      cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
-      (pdTest, sigma2Test, svBetaUTest, bTest, _) <- profiledDeviance
-        PDVAll
-        cholmodFactor
-        ML
-        (glmm mm)
-        randomEffectCalc
-        th2_ML
-      liftIO $ do
-        putStrLn $ "pdTest=" ++ show pdTest
-        putStrLn $ "betaTest=" ++ show (vBeta $ svBetaUTest)
-        putStrLn $ "uTest=" ++ show (SD.toDenseVector $ svU svBetaUTest)
-        putStrLn $ "bTest=" ++ show (SD.toDenseVector $ bTest)
--}
   case resultEither of
     Left  e  -> putStrLn $ "Error: " ++ (show e)
     Right () -> putStrLn $ "Success!"

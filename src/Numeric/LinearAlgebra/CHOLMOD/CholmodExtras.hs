@@ -31,6 +31,7 @@ module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   , printFactor
   , printTriplet
   , printSparse
+  , copyFactor
   -- * re-exports
   , Factor
   , Common
@@ -393,6 +394,13 @@ writev :: MVS.Storable a => MVS.IOVector a -> [a] -> IO ()
 writev v xs =
   sequence_ [ MVS.write v i x | (i, x) <- zip [0 .. (Prelude.length xs - 1)] xs ]
 
+copyFactor :: ForeignPtr CH.Factor -> ForeignPtr CH.Common -> IO (ForeignPtr CH.Factor)
+copyFactor fpF fpC = do
+  withForeignPtr fpC $ \pC -> do
+    withForeignPtr fpF $ \pF -> do
+      pFactorCopy <- copyFactorL pF pC
+      newForeignPtrEnv CH.factor_free_ptr pC pFactorCopy
+
 -- | the N of the N x N factor
 foreign import ccall unsafe "cholmod_extras.h cholmod_factor_n"
   factorN_L :: Ptr CH.Factor -> IO CSize
@@ -433,6 +441,9 @@ foreign import ccall unsafe "cholmod.h cholmod_print_sparse"
 
 foreign import ccall unsafe "cholmod.h cholmod_factorize_p"
   factorize_pL :: Ptr CH.Sparse -> Ptr Double -> Ptr CInt -> CSize -> Ptr Factor -> Ptr Common -> IO ()
+
+foreign import ccall unsafe "cholmod.h cholmod_copy_factor"
+  copyFactorL :: Ptr CH.Factor -> Ptr CH.Common -> IO (Ptr CH.Factor)
 
 
 

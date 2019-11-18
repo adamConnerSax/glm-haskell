@@ -22,12 +22,6 @@ import qualified Statistics.Distribution.Poisson
 import qualified Statistics.Distribution.Normal
                                                as S
 
-import qualified Data.Random as DR
-import qualified Data.Random.Normal as DR
-import qualified Data.Random.Bernoulli as DR
-import qualified Data.Random.Binomial as DR
-import qualified Data.Random.Poisson as DR
-import qualified Data.Random.Gamma as DR
 
 data BinomialCount = CountOne Int | CountEach (VS.Vector Int)
 
@@ -239,16 +233,6 @@ scaledVariance Bernoulli vMu = VS.map (scaledVarianceOne DBernoulli) vMu
 scaledVariance Poisson   vMu = VS.map (scaledVarianceOne DPoisson) vMu
 scaledVariance Gamma     vMu = VS.map (scaledVarianceOne DGamma) vMu
 
-
--- TODO: handle the sometimes requiring dev parameter in a cleaner way.
-generateSample :: DR.MonadRandom m => ObservationDistribution -> Double -> Double -> m Double
-generateSample od mu dev = DR.sample d where
-  d = case od of
-    Normal -> DR.normal mu dev
-    Bernoulli -> DR.bernoulli mu
-    Binomial n -> DR.binomial n mu
-    Poisson -> DR.poisson mu
-    Gamma -> DR.gamma (1/dev) (mu * dev) -- FIX: This is a guess at these parameters!!
 
 -- Numeric helpers 
 

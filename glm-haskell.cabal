@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: def6577acafdbf16c9d7acd4a3c9d44ba941909ab4bd6693c21554b8d351eddd
+-- hash: 8ab12f0b9e98243069b31b6475fe1145655195c06a166bf8abe6b3f22122d0d5
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -36,6 +36,7 @@ flag dump-core
 library
   exposed-modules:
       Data.IndexedSet
+      Numeric.GLM.Bootstrap
       Numeric.GLM.ComputeTypes
       Numeric.GLM.FunctionFamily
       Numeric.GLM.MixedModel
@@ -78,11 +79,11 @@ library
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
     , polysemy >=0.7.0 && <1.3
+    , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
-    , polysemy-RandomFu >= 0.4.0.0 && < 0.5
     , profunctors >=5.3 && <5.5
-    , random-fu >= 0.2.7.0 && < 0.3
+    , random-fu >=0.2.7.0 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -129,9 +130,11 @@ test-suite CHOLMOD-test
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
     , polysemy >=0.7.0 && <1.3
+    , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
+    , random-fu >=0.2.7.0 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -168,9 +171,11 @@ test-suite GLMM-test
     , nonlinear-optimization-ad >=0.2 && <0.3
     , pipes
     , polysemy >=0.7.0 && <1.3
+    , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
+    , random-fu >=0.2.7.0 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -208,9 +213,11 @@ test-suite LMM-test
     , nonlinear-optimization-ad >=0.2 && <0.3
     , pipes
     , polysemy >=0.7.0 && <1.3
+    , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
+    , random-fu >=0.2.7.0 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3

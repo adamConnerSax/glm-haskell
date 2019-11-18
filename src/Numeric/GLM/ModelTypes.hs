@@ -35,6 +35,7 @@ module Numeric.GLM.ModelTypes
   , generalized
   , fixedPredictors
   , observations
+  , changeMMObservations
   , RandomEffectModelMatrix
   , CovarianceVec
   , LambdaMatrix
@@ -160,13 +161,23 @@ fitSpecByGroup fixedEffects ebg rowClassifier = do
   fmap M.fromList $ traverse makeSpec groupInfoList
 
 data RegressionModelSpec b = RegressionModelSpec { rmsFixedEffects :: (GLM.FixedEffects b)
-                                             , rmsFixedPredictors :: FixedPredictors
-                                             , rmsObservations :: Observations
-                                             } deriving (Show, Eq)
+                                                 , rmsFixedPredictors :: FixedPredictors
+                                                 , rmsObservations :: Observations
+                                                 } deriving (Show, Eq)
+
+changeRMSObservations
+  :: Observations -> RegressionModelSpec b -> RegressionModelSpec b
+changeRMSObservations os (RegressionModelSpec fes fps _) =
+  RegressionModelSpec fes fps os
 
 data MixedModelSpec b g = MixedModelSpec { mmsRegressionModelSpec :: (RegressionModelSpec b),
                                            mmsFitSpecByGroup :: (FitSpecByGroup g)
                                          } deriving (Show, Eq)
+
+changeMMSObservations
+  :: Observations -> MixedModelSpec b g -> MixedModelSpec b g
+changeMMSObservations os (MixedModelSpec rms fsbg) =
+  MixedModelSpec (changeRMSObservations os rms) fsbg
 
 data LMMOptimizer = LMM_BOBYQA | LMM_NELDERMEAD | LMM_SBPLX | LMM_NEWUOA_BOUND deriving (Show, Eq)
 
@@ -200,12 +211,26 @@ data LinearMixedModelSpec b g =
                        , lmmsControls :: LMMControls
                        } deriving (Show)
 
+changeLMMSObservations
+  :: Observations -> LinearMixedModelSpec b g -> LinearMixedModelSpec b g
+changeLMMSObservations os (LinearMixedModelSpec mms c) =
+  LinearMixedModelSpec (changeMMSObservations os mms) c
+
 data GeneralizedLinearMixedModelSpec b g =
   GeneralizedLinearMixedModelSpec { glmmsLinearMixedModelSpec :: LinearMixedModelSpec b g
                                   , glmmsWeights :: WMatrix -- this should prolly be in LinearMixedModelSpec
                                   , glmmsObservationsDistribution :: GLM.ObservationsDistribution
                                   , glmmsControls :: GLMMControls
                                   } deriving (Show)
+
+
+changeGLMMSObservations
+  :: Observations
+  -> GeneralizedLinearMixedModelSpec b g
+  -> GeneralizedLinearMixedModelSpec b g
+changeGLMMSObservations os (GeneralizedLinearMixedModelSpec lmms vW od c) =
+  GeneralizedLinearMixedModelSpec (changeLMMSObservations os lmms) vW od c
+
 
 data MixedModel b g = LinearMixedModel (LinearMixedModelSpec b g)
                     | GeneralizedLinearMixedModel (GeneralizedLinearMixedModelSpec b g)
@@ -232,6 +257,12 @@ fixedPredictors = rmsFixedPredictors . regressionModelSpec
 
 observations :: MixedModel b g -> Observations
 observations = rmsObservations . regressionModelSpec
+
+changeMMObservations :: Observations -> MixedModel b g -> MixedModel b g
+changeMMObservations os (LinearMixedModel lmms) =
+  LinearMixedModel (changeLMMSObservations os lmms)
+changeMMObservations os (GeneralizedLinearMixedModel glmms) =
+  GeneralizedLinearMixedModel (changeGLMMSObservations os glmms)
 
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVec = LA.Vector Double
