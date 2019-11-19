@@ -10,6 +10,7 @@ module Numeric.GLM.Bootstrap
   ( module Numeric.GLM.Bootstrap
   , module Polysemy.RandomFu
   , module Polysemy.Async
+  , module Statistics.Types
   )
 where
 
@@ -38,6 +39,7 @@ import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
                                                as CH
 
 import qualified Statistics.Types              as S
+import           Statistics.Types               ( mkCL )
 import qualified Statistics.Distribution       as S
 import qualified Statistics.Distribution.StudentT
                                                as S
@@ -61,9 +63,12 @@ import qualified Knit.Effect.Logger            as P
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 import qualified Polysemy.RandomFu             as P
-import           Polysemy.RandomFu              ( runRandomIO )
+import           Polysemy.RandomFu              ( RandomFu
+                                                , runRandomIO
+                                                )
 import qualified Polysemy.Async                as P
-import           Polysemy.Async                 ( asyncToIO
+import           Polysemy.Async                 ( Async
+                                                , asyncToIO
                                                 , asyncToIOFinal
                                                 )
 --import qualified Polysemy.ConstraintAbsorber.MonadRandom
@@ -140,6 +145,16 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
       mapM (KQ.writeQueue queue) factors -- load the concurrent Queue with the copied factors
       return queue
 
+{-    
+    commonQueue <- do
+      nCommons <- if doConcurrently then liftIO getNumCapabilities else return 1
+      queue <- liftIO KQ.newQueue
+      extraCommons <- traverse (const GLM.cholmodMakeCommon)
+        $ replicate (n - 1) ()
+      let commons = fpC : extraCommons
+      liftIO $ mapM (KQ.writeQueue queue) commons -- load the concurrent Queue with the copied factors
+      return queue
+-}
     let generateOne =
           generateSamples (GLM.observationDistribution mm0) vMuSol devSol
 
@@ -194,26 +209,34 @@ bootstrappedConfidence mm getPredM getLabelM rc ebg (fitBetaU, fitvb) bootstraps
     let predict = GLM.predictFromBetaUB mm getPredM getLabelM rc ebg
     fitX        <- predict fitBetaU fitvb
     bootstrapXs <- traverse (uncurry predict) bootstraps
-    return (fitX, bootstrapCI ciType fitX bootstrapXs cl)
+    ci          <- bootstrapCI ciType fitX bootstrapXs cl
+    return (fitX, ci)
 
 bootstrapCI
-  :: BootstrapCIType -> Double -> [Double] -> S.CL Double -> (Double, Double)
-bootstrapCI BCI_Student x bxs cl =
+  :: GLM.Effects r
+  => BootstrapCIType
+  -> Double
+  -> [Double]
+  -> S.CL Double
+  -> P.Sem r (Double, Double)
+bootstrapCI BCI_Student x bxs cl = do
   let sigmaB  = sqrt $ FL.fold FL.variance bxs
       n       = length bxs
       tDist   = S.studentT (realToFrac $ n - 1)
       tFactor = S.quantile tDist (S.significanceLevel cl / 2) -- NB: this is negative 
-  in  (x + tFactor * sigmaB, x - tFactor * sigmaB)
+  return (x + tFactor * sigmaB, x - tFactor * sigmaB)
 
-bootstrapCI BCI_Percentile x bxs cl =
+bootstrapCI BCI_Percentile x bxs cl = do
   let sortedBxs  = L.sort bxs
       n          = length bxs
       indexLower = round $ realToFrac (n - 1) * (S.significanceLevel cl / 2)
       indexUpper = n - 1 - indexLower
-  in  (sortedBxs !! indexLower, sortedBxs !! indexUpper)
+  return (sortedBxs !! indexLower, sortedBxs !! indexUpper)
 
-bootstrapCI BCI_Pivot x bxs cl = (2 * x - u, 2 * x - l)
-  where (l, u) = bootstrapCI BCI_Percentile x bxs cl
+bootstrapCI BCI_Pivot x bxs cl = do
+  (l, u) <- bootstrapCI BCI_Percentile x bxs cl
+  return (2 * x - u, 2 * x - l)
+
 
 bootstrapCI BCI_ExpandedPercentile x bxs cl = bootstrapCI BCI_Percentile
                                                           x
@@ -229,16 +252,13 @@ bootstrapCI BCI_ExpandedPercentile x bxs cl = bootstrapCI BCI_Percentile
     (sqrt (realToFrac n / realToFrac (n - 1)) * tFactor)
   cl' = S.mkCLFromSignificance alpha'
 
-bootstrapCI BCI_Accelerated x bxs cl =
+bootstrapCI BCI_Accelerated x bxs cl = do
   let
-    n          = length bxs
-    nDist      = S.standard
-    zAlpha     = S.quantile nDist $ S.significanceLevel cl
-    z1mAlpha   = S.quantile nDist $ S.confidenceLevel cl
-    countFewer = length $ filter (< x) bxs
-    fracFewer  = realToFrac countFewer / realToFrac (length bxs)
-    invNormCDF x = sqrt 2 * SF.invErf ((2 * x) - 1)
-    z0 = invNormCDF fracFewer
+    n        = length bxs
+    nDist    = S.standard
+    zAlpha   = S.quantile nDist $ S.significanceLevel cl
+    z1mAlpha = S.quantile nDist $ S.confidenceLevel cl
+
     jxs =
       let s = FL.fold FL.sum bxs
       in  fmap (\x -> (s - x) / (realToFrac $ n - 1)) bxs
@@ -246,11 +266,25 @@ bootstrapCI BCI_Accelerated x bxs cl =
     numF   = FL.premap (\x -> (mjx - x) ^^ (3 :: Int)) FL.sum
     denomF = fmap (\s -> 6 * (s ** 1.5))
       $ FL.premap (\x -> (mjx - x) ^^ (2 :: Int)) FL.sum
-    a = FL.fold ((/) <$> numF <*> denomF) jxs
-    alphaZ x = S.cumulative nDist $ z0 + (z0 + x) / (1 - a * (z0 + x))
-    indexL    = round $ realToFrac (n - 1) * alphaZ zAlpha
-    indexU    = round $ realToFrac (n - 1) * alphaZ z1mAlpha
-    sortedBxs = L.sort bxs
-  in
-    (sortedBxs !! indexL, sortedBxs !! indexU)
+    a            = FL.fold ((/) <$> numF <*> denomF) jxs
+    countSmaller = length $ filter (< x) bxs
+    alphaZ x = case countSmaller of
+      0 -> 0
+      m ->
+        let fracSmaller = realToFrac m / realToFrac n
+            z0          = S.quantile nDist fracSmaller
+        in  S.cumulative nDist (z0 + ((z0 + x) / (1 - a * (z0 + x))))
+    indexScale = realToFrac (n - 1) -- index varies from 0 to (n-1)
+    indexL     = round $ indexScale * (alphaZ zAlpha)
+    indexU     = round $ indexScale * (alphaZ z1mAlpha)
+    sortedBxs  = L.sort bxs
+  P.logLE P.Info
+    $  "indexL="
+    <> (T.pack $ show indexL)
+    <> "; indexU="
+    <> (T.pack $ show indexU)
+  P.logLE P.Info $ "a=" <> (T.pack $ show a)
+  P.logLE P.Info $ "zAlpha=" <> (T.pack $ show zAlpha)
+  P.logLE P.Info $ "z1mAlpha=" <> (T.pack $ show z1mAlpha)
+  return (sortedBxs !! indexL, sortedBxs !! indexU)
 

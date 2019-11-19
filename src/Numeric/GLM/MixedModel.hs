@@ -278,7 +278,7 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 = do
   case eSol of
     Left result -> P.throw (GLM.OtherGLMError $ T.pack $ show result)
     Right (NL.Solution pdS thS result) -> do
-      P.logLE P.Info
+      P.logLE P.Diagnostic
         $  "Solution ("
         <> (T.pack $ show result)
         <> ") reached! At th="
@@ -458,12 +458,17 @@ type CholmodFactor = ( CH.ForeignPtr CH.Common -- ^ pre-allocated CHOMOD common 
                      , GLM.PMatrix -- ^ permutation matrix from above
                      )
 
+cholmodMakeCommon :: GLM.EffectsIO r => P.Sem r (CH.ForeignPtr CH.Common)
+cholmodMakeCommon = liftIO $ do
+  cholmodC <- CH.allocCommon
+  CH.startC cholmodC
+  CH.setFinalLL 1 cholmodC
+  return cholmodC
+
 cholmodAnalyzeProblem
   :: GLM.EffectsIO r => GLM.RandomEffectCalculated -> P.Sem r CholmodFactor
 cholmodAnalyzeProblem reCalc = do
-  cholmodC <- liftIO CH.allocCommon
-  liftIO $ CH.startC cholmodC
-  liftIO $ CH.setFinalLL 1 cholmodC -- I don't quite get this.  We should be able to solve LDx = b either way??
+  cholmodC        <- cholmodMakeCommon
   (cholmodF, smP) <-
     liftIO
     $ CH.spMatrixAnalyzeWP cholmodC CH.SquareSymmetricLower
