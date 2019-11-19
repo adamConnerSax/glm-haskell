@@ -20,6 +20,7 @@ import qualified Numeric.SparseDenseConversions
 import           DataFrames
 import qualified Frames                        as F
 
+import qualified Statistics.Types              as S
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
@@ -41,8 +42,7 @@ import           System.IO                      ( hSetBuffering
                                                 , stdout
                                                 , BufferMode(..)
                                                 )
-
-verbose = True
+verbose = False
 
 runFIO =
   let runGLMEffects = if verbose then runEffectsVerboseIO else runEffectsIO
@@ -243,18 +243,7 @@ main = do
       $  putStrLn
       $  "Random Effects:\n"
       ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
-    let f r = do
-          let obs = getObservation r
-          fitted <- GLM.fitted mm
-                               getPredictor
-                               groupLabels
-                               fep_GLMM
-                               epg
-                               rowClassifier
-                               r
-          return (obs, fitted)
-    fitted <- traverse f (FL.fold FL.list frame)
-    liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
+
     liftIO $ putStrLn $ "Boostrapping for confidence intervals"
     bootstraps <- GLM.parametricBootstrap mdVerbosity
                                           ML
@@ -264,8 +253,22 @@ main = do
                                           th2_GLMM
                                           vMuSol
                                           (sqrt sigma2_GLMM)
-                                          10
-                                          False
+                                          100
+                                          True
+    let f r = do
+          let obs = getObservation r
+          bootWCI <- GLM.bootstrappedConfidence mm
+                                                (Just . getPredictor r)
+                                                (Just . groupLabels r)
+                                                rowClassifier
+                                                effectsByGroup
+                                                (vBetaU2_GLMM, vb2_GLMM)
+                                                bootstraps
+                                                GLM.BCI_Accelerated
+                                                (S.mkCL 0.95)
+          return (obs, bootWCI)
+    fitted <- traverse f (FL.fold FL.list frame)
+    liftIO $ putStrLn $ "Fitted:\n" ++ (L.intercalate "\n" $ fmap show fitted)
     liftIO $ putStrLn "Done"
 
 

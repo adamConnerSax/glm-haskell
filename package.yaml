@@ -28,6 +28,7 @@ dependencies:
 - hcholmod >= 0.1.0 && < 0.2
 - hmatrix >= 0.19.0 && < 0.21
 - hmatrix-nlopt >= 0.1.2 && < 0.2
+- kazura-queue >= 0.1.0 && < 0.2 
 - knit-haskell >= 0.7.0 && < 0.8
 - math-functions >= 0.3.0 && < 0.4
 - nonlinear-optimization >= 0.3.11 && < 0.4
@@ -57,7 +58,7 @@ library:
   - -Wall
   - -fno-warn-unused-top-binds
   - -funbox-strict-fields
-  - -fplugin=Polysemy.Plugin	
+  - -fplugin=Polysemy.Plugin
   extra-libraries:
     - cholmod
     - amd
@@ -81,7 +82,7 @@ tests:
   LMM-test:
     main: LMM-test.hs
     source-dirs: test/glm
-    ghc-options: -O -Wall 
+    ghc-options: -O -Wall -threaded -rtsopts
     dependencies:
       - glm-haskell
       - Frames
@@ -91,7 +92,11 @@ tests:
   GLMM-test:
     main: GLMM-test.hs
     source-dirs: test/glm
-    ghc-options: -O -Wall
+    ghc-options:
+      - -O
+      - -Wall
+      - -threaded
+      - -rtsopts
     dependencies:
       - glm-haskell
       - Frames

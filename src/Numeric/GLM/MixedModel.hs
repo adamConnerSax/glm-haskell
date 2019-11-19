@@ -915,8 +915,9 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
           <> (T.pack $ show dBetaU)
 -}
     let --pdF x y = fst <$> profiledDeviance' PDVNone ML glmm reCalc vTh chol x y
-        mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-        vY = GLM.rmsObservations $ GLM.regressionModelSpec mm
+        mX  = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+        vY  = GLM.rmsObservations $ GLM.regressionModelSpec mm
+        tol = GLM.lmmOptimizerTolerance $ GLM.lmmControls mm
 --        smZS = GLM.smZS zStar
     pd0 <- pdF vEta svU --vBeta svU
     let
@@ -927,7 +928,7 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
             --vBeta'     = vBeta + (GLM.bu_vBeta deltaBetaU)
             vEta'      = vEta + (LA.scale x vdEta)
         pdNew <- pdF vEta' svU'
-        return $ if pdNew <= pd0
+        return $ if pdNew <= (pd0 + tol) -- sometimes dBetaU is basically 0 because we are at a minimum.  So we need a little breathing room.
           then Shrunk pdNew vEta' svU' deltaBetaU
           else NotShrunk
       check triesLeft x = do

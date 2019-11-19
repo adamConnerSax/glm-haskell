@@ -185,6 +185,21 @@ report mm smZ vBeta svb = do
     numberedGroups
 
 
+predictFromBetaUB
+  :: (Enum b, Bounded b, Ord b, Ord g, Show g, Show b, GLM.Effects r)
+  => GLM.MixedModel b g
+  -> (b -> Maybe Double)
+  -> (g -> Maybe T.Text)
+  -> GLM.RowClassifier g
+  -> GLM.EffectsByGroup g b
+  -> GLM.BetaU
+  -> VS.Vector Double -- b
+  -> P.Sem r Double
+predictFromBetaUB mm getPredictorM getLabelM rc ebg betaU vb = do
+  let fep = fixedEffectParameters mm betaU
+  epg <- effectParametersByGroup rc ebg vb
+  fst <$> predict mm getPredictorM getLabelM fep epg rc
+
 predict
   :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
   => GLM.MixedModel b g
@@ -296,12 +311,12 @@ fitted
   -> GLM.RowClassifier g
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted mm getPred getLabel fes ebg rowClassifier row =
+fitted mm getPred getLabel fep ebg rowClassifier row =
   fst
     <$> predict mm
                 (Just . getPred row)
                 (Just . getLabel row)
-                fes
+                fep
                 ebg
                 rowClassifier
 

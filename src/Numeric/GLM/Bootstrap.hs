@@ -14,20 +14,36 @@ module Numeric.GLM.Bootstrap
 where
 
 import qualified Numeric.LinearAlgebra         as LA
+import qualified Data.List                     as L
 import           Data.Maybe                     ( catMaybes )
 import qualified Data.Text                     as T
 import qualified Data.Vector.Storable          as VS
 import qualified Data.Vector                   as VB
 
+import qualified Control.Foldl                 as FL
+
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
+import qualified Control.Concurrent.KazuraQueue
+                                               as KQ
+import           GHC.Conc                       ( getNumCapabilities )
+
 
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Numeric.GLM.ModelTypes        as GLM
+import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.MixedModel        as GLM
+import qualified Numeric.GLM.Report            as GLM
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
                                                as CH
 
+import qualified Statistics.Types              as S
+import qualified Statistics.Distribution       as S
+import qualified Statistics.Distribution.StudentT
+                                               as S
+import qualified Statistics.Distribution.Normal
+                                               as S
+import qualified Numeric.SpecFunctions         as SF
 
 import qualified Data.Random                   as DR
 import qualified Data.Random.Distribution.Normal
@@ -93,6 +109,13 @@ generateSamples osd vMu dev = do
   VS.convert <$> VB.zipWithM gs vOD (VB.convert vMu)
 
 
+data CholmodStructure = CS_ToCompute GLM.RandomEffectCalculated | CS_Computed GLM.CholmodFactor
+
+cholmodFactor
+  :: GLM.EffectsIO r => CholmodStructure -> P.Sem r (GLM.CholmodFactor)
+cholmodFactor (CS_ToCompute reCalc) = GLM.cholmodAnalyzeProblem reCalc
+cholmodFactor (CS_Computed  cf    ) = return cf
+
 parametricBootstrap
   :: (GLM.EffectsIO r, P.Member P.RandomFu r, P.Member P.Async r)
   => GLM.MinimizeDevianceVerbosity
@@ -109,21 +132,29 @@ parametricBootstrap
 parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
   do
     let (fpC, fpF, smP) = cf
-        generateOne =
+    factorQueue <- liftIO $ do
+      nFactors <- if doConcurrently then getNumCapabilities else return 1
+      let factors =
+            CS_Computed cf : (replicate (nFactors - 1) $ CS_ToCompute reCalc)
+      queue <- KQ.newQueue
+      mapM (KQ.writeQueue queue) factors -- load the concurrent Queue with the copied factors
+      return queue
+
+    let generateOne =
           generateSamples (GLM.observationDistribution mm0) vMuSol devSol
+
         solveOne (n, newMM) =
           P.wrapPrefix ("Bootstrap (" <> (T.pack $ show n) <> ")") $ do
             P.logLE P.Diagnostic "Starting..."
-            fpF_Copy <- if doConcurrently
-              then liftIO $ CH.copyFactor fpF fpC
-              else return fpF
-            (_, _, _, betaU, b, _) <- GLM.minimizeDevianceInner
-              mdv
-              dt
-              newMM
-              reCalc
-              (fpC, fpF_Copy, smP)
-              thSol
+            cs                     <- liftIO $ KQ.readQueue factorQueue -- get a factor when available.  Blocks until then
+            cf'                    <- cholmodFactor cs
+            (_, _, _, betaU, b, _) <- GLM.minimizeDevianceInner mdv
+                                                                dt
+                                                                newMM
+                                                                reCalc
+                                                                cf'
+                                                                thSol
+            liftIO $ KQ.writeQueue factorQueue (CS_Computed cf') -- put the factor back
             P.logLE P.Diagnostic "Finished."
             return (betaU, b)
     newObservations <- mapM (const generateOne) $ replicate n ()
@@ -144,20 +175,82 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
       <> " succeeded."
     return res
 
-{-  
--- launch each action on its own thread, writing the result to an MVar.
--- as each MVar is written to,
--- place each result in the appropriate place in the structure.
--- return the new structure when all results are available.
-sequenceConcurrently :: Traversable t => t (IO a) -> IO (t a)
-sequenceConcurrently actions = do
-  let f :: IO a -> IO (CC.MVar a, CC.ThreadId)
-      f action = do
-        mvar     <- CC.newEmptyMVar
-        threadId <- forkIO $ (action >>= CC.putMVar mvar)
-        return (mvar, threadId)
-      g :: (CC.MVar a, CC.ThreadId) -> IO a
-      g (mvar, _) = takeMVar mvar
-  forked <- traverse f actions -- IO (t (MVar a, ThreadId))
-  traverse g forked
--}
+data BootstrapCIType = BCI_Student | BCI_Percentile | BCI_Pivot | BCI_ExpandedPercentile | BCI_Accelerated
+
+bootstrappedConfidence
+  :: (Enum b, Bounded b, Ord b, Ord g, Show g, Show b, GLM.Effects r)
+  => GLM.MixedModel b g
+  -> (b -> Maybe Double)
+  -> (g -> Maybe T.Text)
+  -> GLM.RowClassifier g
+  -> GLM.EffectsByGroup g b
+  -> (GLM.BetaU, VS.Vector Double) -- fit result
+  -> [(GLM.BetaU, VS.Vector Double)] -- bootstrap fits
+  -> BootstrapCIType
+  -> S.CL Double
+  -> P.Sem r (Double, (Double, Double))
+bootstrappedConfidence mm getPredM getLabelM rc ebg (fitBetaU, fitvb) bootstraps ciType cl
+  = do
+    let predict = GLM.predictFromBetaUB mm getPredM getLabelM rc ebg
+    fitX        <- predict fitBetaU fitvb
+    bootstrapXs <- traverse (uncurry predict) bootstraps
+    return (fitX, bootstrapCI ciType fitX bootstrapXs cl)
+
+bootstrapCI
+  :: BootstrapCIType -> Double -> [Double] -> S.CL Double -> (Double, Double)
+bootstrapCI BCI_Student x bxs cl =
+  let sigmaB  = sqrt $ FL.fold FL.variance bxs
+      n       = length bxs
+      tDist   = S.studentT (realToFrac $ n - 1)
+      tFactor = S.quantile tDist (S.significanceLevel cl / 2) -- NB: this is negative 
+  in  (x + tFactor * sigmaB, x - tFactor * sigmaB)
+
+bootstrapCI BCI_Percentile x bxs cl =
+  let sortedBxs  = L.sort bxs
+      n          = length bxs
+      indexLower = round $ realToFrac (n - 1) * (S.significanceLevel cl / 2)
+      indexUpper = n - 1 - indexLower
+  in  (sortedBxs !! indexLower, sortedBxs !! indexUpper)
+
+bootstrapCI BCI_Pivot x bxs cl = (2 * x - u, 2 * x - l)
+  where (l, u) = bootstrapCI BCI_Percentile x bxs cl
+
+bootstrapCI BCI_ExpandedPercentile x bxs cl = bootstrapCI BCI_Percentile
+                                                          x
+                                                          bxs
+                                                          cl'
+ where
+  n        = length bxs
+  tDist    = S.studentT (realToFrac $ n - 1)
+  tFactor  = S.quantile tDist (S.significanceLevel cl / 2)
+  normDist = S.standard
+  alpha'   = 2 * S.cumulative
+    normDist
+    (sqrt (realToFrac n / realToFrac (n - 1)) * tFactor)
+  cl' = S.mkCLFromSignificance alpha'
+
+bootstrapCI BCI_Accelerated x bxs cl =
+  let
+    n          = length bxs
+    nDist      = S.standard
+    zAlpha     = S.quantile nDist $ S.significanceLevel cl
+    z1mAlpha   = S.quantile nDist $ S.confidenceLevel cl
+    countFewer = length $ filter (< x) bxs
+    fracFewer  = realToFrac countFewer / realToFrac (length bxs)
+    invNormCDF x = sqrt 2 * SF.invErf ((2 * x) - 1)
+    z0 = invNormCDF fracFewer
+    jxs =
+      let s = FL.fold FL.sum bxs
+      in  fmap (\x -> (s - x) / (realToFrac $ n - 1)) bxs
+    mjx    = FL.fold FL.mean jxs
+    numF   = FL.premap (\x -> (mjx - x) ^^ (3 :: Int)) FL.sum
+    denomF = fmap (\s -> 6 * (s ** 1.5))
+      $ FL.premap (\x -> (mjx - x) ^^ (2 :: Int)) FL.sum
+    a = FL.fold ((/) <$> numF <*> denomF) jxs
+    alphaZ x = S.cumulative nDist $ z0 + (z0 + x) / (1 - a * (z0 + x))
+    indexL    = round $ realToFrac (n - 1) * alphaZ zAlpha
+    indexU    = round $ realToFrac (n - 1) * alphaZ z1mAlpha
+    sortedBxs = L.sort bxs
+  in
+    (sortedBxs !! indexL, sortedBxs !! indexU)
+
