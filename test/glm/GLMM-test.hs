@@ -13,6 +13,7 @@ import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Bootstrap         as GLM
+import qualified Numeric.GLM.Predict           as GLM
 import qualified Numeric.GLM.Report            as GLM
 
 import qualified Numeric.SparseDenseConversions
@@ -245,6 +246,7 @@ main = do
       ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
 
     liftIO $ putStrLn $ "Boostrapping for confidence intervals"
+
     bootstraps <- GLM.parametricBootstrap mdVerbosity
                                           ML
                                           mm
@@ -253,10 +255,27 @@ main = do
                                           th2_GLMM
                                           vMuSol
                                           (sqrt sigma2_GLMM)
-                                          100
+                                          10
                                           True
     let f r = do
           let obs = getObservation r
+          fitted <- GLM.fitted mm
+                               getPredictor
+                               groupLabels
+                               fep_GLMM
+                               epg
+                               rowClassifier
+                               r
+          fitted' <- GLM.fitted' mm
+                                 getPredictor
+                                 groupLabels
+                                 fixedEffects
+                                 effectsByGroup
+                                 rowClassifier
+                                 vBetaU2_GLMM
+                                 vb2_GLMM
+                                 r
+{-                     
           bootWCI <- GLM.bootstrappedConfidence mm
                                                 (Just . getPredictor r)
                                                 (Just . groupLabels r)
@@ -266,7 +285,9 @@ main = do
                                                 bootstraps
                                                 GLM.BCI_Accelerated
                                                 (S.mkCL 0.95)
-          return (obs, bootWCI)
+-}
+          return (obs, fitted, fitted')
+
     fitted <- traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ (L.intercalate "\n" $ fmap show fitted)
     liftIO $ putStrLn "Done"

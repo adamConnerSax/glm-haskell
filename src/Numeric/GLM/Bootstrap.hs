@@ -34,7 +34,7 @@ import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.MixedModel        as GLM
-import qualified Numeric.GLM.Report            as GLM
+import qualified Numeric.GLM.Predict           as GLM
 import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
                                                as CH
 
@@ -135,7 +135,7 @@ parametricBootstrap
   -> Bool
   -> P.Sem r [(GLM.BetaU, VS.Vector Double)] -- beta, u and b
 parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
-  do
+  P.wrapPrefix "parametricBootstrap" $ do
     let (fpC, fpF, smP) = cf
     factorQueue <- liftIO $ do
       nFactors <- if doConcurrently then getNumCapabilities else return 1
@@ -173,6 +173,8 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
             P.logLE P.Diagnostic "Finished."
             return (betaU, b)
     newObservations <- mapM (const generateOne) $ replicate n ()
+--    let asMat = LA.fromColumns (vMuSol : newObservations)
+--    P.logLE P.Info $ "vMuSol | sims=\n" <> (T.pack $ show asMat)
     let newMixedModels =
           fmap (\os -> GLM.changeMMObservations os mm0) newObservations
         seqF = if doConcurrently
@@ -252,6 +254,7 @@ bootstrapCI BCI_ExpandedPercentile x bxs cl = bootstrapCI BCI_Percentile
     (sqrt (realToFrac n / realToFrac (n - 1)) * tFactor)
   cl' = S.mkCLFromSignificance alpha'
 
+
 bootstrapCI BCI_Accelerated x bxs cl = do
   let
     n        = length bxs
@@ -268,23 +271,35 @@ bootstrapCI BCI_Accelerated x bxs cl = do
       $ FL.premap (\x -> (mjx - x) ^^ (2 :: Int)) FL.sum
     a            = FL.fold ((/) <$> numF <*> denomF) jxs
     countSmaller = length $ filter (< x) bxs
-    alphaZ x = case countSmaller of
-      0 -> 0
-      m ->
+    alphaZ x = case checkEdges 0 n countSmaller of
+      LowerBound -> 0
+      UpperBound -> 1
+      Between m ->
         let fracSmaller = realToFrac m / realToFrac n
             z0          = S.quantile nDist fracSmaller
         in  S.cumulative nDist (z0 + ((z0 + x) / (1 - a * (z0 + x))))
     indexScale = realToFrac (n - 1) -- index varies from 0 to (n-1)
-    indexL     = round $ indexScale * (alphaZ zAlpha)
-    indexU     = round $ indexScale * (alphaZ z1mAlpha)
+    indexL     = round $ indexScale * alphaZ zAlpha
+    indexU     = round $ indexScale * alphaZ z1mAlpha
     sortedBxs  = L.sort bxs
-  P.logLE P.Info
+  P.logLE P.Diagnostic
     $  "indexL="
     <> (T.pack $ show indexL)
     <> "; indexU="
     <> (T.pack $ show indexU)
-  P.logLE P.Info $ "a=" <> (T.pack $ show a)
-  P.logLE P.Info $ "zAlpha=" <> (T.pack $ show zAlpha)
-  P.logLE P.Info $ "z1mAlpha=" <> (T.pack $ show z1mAlpha)
+    <> "; countSmaller="
+    <> (T.pack $ show countSmaller)
+    <> ";a="
+    <> (T.pack $ show a)
+    <> ";zAlpha="
+    <> (T.pack $ show zAlpha)
+    <> ";z1mAlpha="
+    <> (T.pack $ show z1mAlpha)
   return (sortedBxs !! indexL, sortedBxs !! indexU)
 
+data AtEdges a = LowerBound | Between a | UpperBound
+
+checkEdges :: Eq a => a -> a -> a -> AtEdges a
+checkEdges lower upper x | x == lower = LowerBound
+                         | x == upper = UpperBound
+                         | otherwise  = Between x
