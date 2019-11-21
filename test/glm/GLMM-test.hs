@@ -25,6 +25,7 @@ import qualified Statistics.Types              as S
 
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
+import qualified Knit.Effect.Logger            as P
 import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
@@ -226,6 +227,7 @@ main = do
     ((th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM), vMuSol, cf) <-
       minimizeDeviance mdVerbosity ML mm randomEffectCalc th0
     liftIO $ do
+      putStrLn $ "theta=" ++ show th2_GLMM
       putStrLn $ "deviance=" ++ show pd2_GLMM
       putStrLn $ "beta=" ++ show (GLM.bu_vBeta vBetaU2_GLMM)
       putStrLn $ "u=" ++ show (GLM.bu_svU vBetaU2_GLMM)
@@ -257,7 +259,11 @@ main = do
                                           (sqrt sigma2_GLMM)
                                           10
                                           True
-    smCondVar <- GLM.conditionalCovariances mm cf randomEffectCalc th2_GLMM vBetaU2_GLMM
+    smCondVar <- GLM.conditionalCovariances mm
+                                            cf
+                                            randomEffectCalc
+                                            th2_GLMM
+                                            vBetaU2_GLMM
     let GLM.FixedEffectStatistics _ mBetaCov = fes_GLMM
     let f r = do
           let obs = getObservation r
@@ -278,7 +284,7 @@ main = do
                                  vBetaU2_GLMM
                                  vb2_GLMM
                                  r
--}                     
+-}
           bootWCI <- GLM.bootstrappedConfidence mm
                                                 (Just . getPredictor r)
                                                 (Just . groupLabels r)
@@ -289,17 +295,17 @@ main = do
                                                 GLM.BCI_Accelerated
                                                 (S.mkCL 0.95)
           predictCVCI <- GLM.predictWithCondVarCI mm
-                         (Just . getPredictor r)
-                         (Just . groupLabels r)
-                         fixedEffects
-                         effectsByGroup
-                         rowClassifier
-                         vBetaU2_GLMM
-                         vb2_GLMM
-                         (S.mkCL 0.95)
-                         mBetaCov
-                         smCondVar
-                         
+                                                  (Just . getPredictor r)
+                                                  (Just . groupLabels r)
+                                                  fixedEffects
+                                                  effectsByGroup
+                                                  rowClassifier
+                                                  vBetaU2_GLMM
+                                                  vb2_GLMM
+                                                  (S.mkCL 0.95)
+                                                  mBetaCov
+                                                  smCondVar
+
 
           return (r, obs, bootWCI, predictCVCI)
 

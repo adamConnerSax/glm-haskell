@@ -63,21 +63,23 @@ linkFunction ReciprocalLink =
 
 data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
 
+
 -- notation here:
 -- y are the observations
 -- mu is the conditional mean of the linear predictor after mapping via the link function
+{-
 familyWeights
   :: ObservationsDistribution -> LA.Vector Double -> LA.Vector Double
-familyWeights (Binomial vN) vW = VS.zipWith (\w n -> w * realToFrac n) vW vN
-familyWeights _             vW = vW
-
+--familyWeights (Binomial vN) vW = VS.zipWith (\w n -> w * realToFrac n) vW vN
+familyWeights _ vW = vW
+-}
 varianceScaledWeights
   :: ObservationsDistribution
   -> LA.Vector Double
   -> LA.Vector Double
   -> LA.Vector Double
 varianceScaledWeights od vW vMu =
-  let vVar = scaledVariance od vMu in VS.zipWith (/) (familyWeights od vW) vVar
+  let vVar = scaledVariance od vMu in VS.zipWith (/) vW vVar
 --  let vVar = scaledVariance od vMu in VS.zipWith (/) vW vVar
 
 
@@ -116,7 +118,7 @@ devScale
   -> Double
 devScale od vW vY vMu =
   let vDev = devScaleVec od vW vY vMu
-  in (VS.sum vDev)/(realToFrac $ VS.length vMu)
+  in  (VS.sum vDev) / (realToFrac $ VS.length vMu)
 
 
 devScaleVec
@@ -231,7 +233,7 @@ aicR od vW vY vMu devResid =
 scaledVarianceOne :: ObservationDistribution -> Double -> Double
 scaledVarianceOne DNormal       _ = 1
 scaledVarianceOne DBernoulli    x = x * (1 - x)
-scaledVarianceOne (DBinomial _) x = x * (1 - x) -- not sure about n here
+scaledVarianceOne (DBinomial n) x = x * (1 - x) / realToFrac n -- not sure about n here
 scaledVarianceOne DPoisson      x = x
 scaledVarianceOne DGamma        x = x * x
 

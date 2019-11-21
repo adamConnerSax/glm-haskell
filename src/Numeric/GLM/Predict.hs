@@ -39,7 +39,8 @@ import qualified Numeric.LinearAlgebra         as LA
 
 import qualified Statistics.Types              as S
 import qualified Statistics.Distribution       as S
-import qualified Statistics.Distribution.StudentT           as S
+import qualified Statistics.Distribution.StudentT
+                                               as S
 
 import qualified Data.Text                     as T
 import qualified Data.Vector.Storable          as VS
@@ -314,8 +315,9 @@ indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
           Just catOffset -> do
             effectCoeffs <- effectsCoefficientVector getPredictorM
                                                      groupEffectsIndex
-            let vecIndices = fmap (\n -> groupOffset + (catOffset * nEffects) + n)
-                                  [0 .. (VS.length effectCoeffs - 1)]
+            let vecIndices = fmap
+                  (\n -> groupOffset + (catOffset * nEffects) + n)
+                  [0 .. (VS.length effectCoeffs - 1)]
             return $ zip vecIndices (VS.toList effectCoeffs)
   indexedSparseVecEntries <- concat <$> traverse getIndexedCoeffs groups
   --P.logLE P.Diagnostic $ T.pack $ show indexedSparseVecEntries
@@ -334,7 +336,7 @@ predict'
   -> P.Sem r (Double, Double) -- (prediction, link (prediction))
 predict' mm getPredictorM getLabelM fes ebg rowClassifier betaU vb = do
   let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
-  vFixedCoeffs <- fixedEffectsCoefficientVector getPredictorM fes
+  vFixedCoeffs  <- fixedEffectsCoefficientVector getPredictorM fes
 --  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
   svGroupCoeffs <-
     SLA.fromListSV (VS.length vb)
@@ -367,23 +369,30 @@ conditionalCovariances
   -> P.Sem r ConditionalCovarianceMatrix
 conditionalCovariances mm cf reCalc vTh betaU = do
   let (cholmodC, cholmodF, _) = cf
-      mX =  GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-      zStar = GLM.makeZS reCalc vTh
+      mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+      zStar                   = GLM.makeZS reCalc vTh
+      smLambda                = (GLM.recMkLambda reCalc) vTh
+      smLambdat               = SLA.transpose smLambda
       vEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
-      (smU, _) = GLM.spUV mm zStar vEta
-      lf        = GLM.linkFunction $ GLM.linkFunctionType mm
-      sigma2 = GLM.devScale
-        (GLM.observationsDistribution mm)
-        (GLM.weights mm)
-        (GLM.observations mm)
-        (VS.map (GLM.invLink lf) vEta)
+      (smU, _)                = GLM.spUV mm zStar vEta
+      lf                      = GLM.linkFunction $ GLM.linkFunctionType mm
+      sigma2                  = GLM.devScale (GLM.observationsDistribution mm)
+                                             (GLM.weights mm)
+                                             (GLM.observations mm)
+                                             (VS.map (GLM.invLink lf) vEta)
   -- reFactorize because the factor gets trashed when we extract L at the end of chomod
       cfs = CH.FactorizeAtAPlusBetaI 1
-      smZSt = SLA.transpose $ GLM.smZS zStar
-  liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric (SLA.transpose smU)    
-  smLLtInvLambda <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_A smZSt
-  let smCondVar = smZSt SLA.#^# smLLtInvLambda
-  return $  sigma2 SLA..* smCondVar
+--      smZS  = GLM.smZS zStar
+--      smZSt = SLA.transpose smZS
+  liftIO $ CH.spMatrixFactorizeP cholmodC
+                                 cholmodF
+                                 cfs
+                                 CH.UnSymmetric
+                                 (SLA.transpose smU)
+  smLLtInvLambda <- liftIO
+    $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_A smLambdat
+  let smCondVar = smLLtInvLambda SLA.## smLambda --smZSt SLA.#^# smLLtInvLambda
+  return $ sigma2 SLA..* smCondVar
 
 
 predictWithCondVarCI
@@ -400,24 +409,27 @@ predictWithCondVarCI
   -> LA.Matrix Double -- Cov_Beta  
   -> ConditionalCovarianceMatrix --Cov_U
   -> P.Sem r (Double, Double, Double) -- (prediction, lower, upper)
-predictWithCondVarCI mm getPredictorM getLabelM fes ebg rowClassifier betaU vb cl mCovBeta smCondVar = do
-  let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
-      n = VS.length $ GLM.observations mm
-  vFixedCoeffs <- fixedEffectsCoefficientVector getPredictorM fes
---  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
-  svGroupCoeffs <-
-    SLA.fromListSV (VS.length vb)
-      <$> indexedGroupCoefficients getPredictorM getLabelM ebg rowClassifier
---  P.logLE P.Diagnostic $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
-  let svb = SD.toSparseVector vb
-      totalEffects =
-        (vFixedCoeffs LA.<.> (GLM.bu_vBeta betaU)) + (svGroupCoeffs SLA.<.> svb)
-      varianceTE = ((mCovBeta LA.#> vFixedCoeffs) LA.<.> vFixedCoeffs) +
-                   ((smCondVar SLA.#> svGroupCoeffs) SLA.<.> svGroupCoeffs)
-      tDist   = S.studentT (realToFrac $ n - 1)
-      tFactor = S.quantile tDist (S.significanceLevel cl / 2)  -- This is negative
-      lower = totalEffects + (tFactor * sqrt varianceTE)
-      upper = totalEffects - (tFactor * sqrt varianceTE)
-  return (invLinkF totalEffects, invLinkF lower, invLinkF upper)
+predictWithCondVarCI mm getPredictorM getLabelM fes ebg rowClassifier betaU vb cl mCovBeta smCondVar
+  = do
+    let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
+        n        = VS.length $ GLM.observations mm
+    vFixedCoeffs  <- fixedEffectsCoefficientVector getPredictorM fes
+  --  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
+    svGroupCoeffs <-
+      SLA.fromListSV (VS.length vb)
+        <$> indexedGroupCoefficients getPredictorM getLabelM ebg rowClassifier
+  --  P.logLE P.Diagnostic $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
+    let svb = SD.toSparseVector vb
+        totalEffects =
+          (vFixedCoeffs LA.<.> (GLM.bu_vBeta betaU))
+            + (svGroupCoeffs SLA.<.> svb)
+        varianceTE =
+          ((mCovBeta LA.#> vFixedCoeffs) LA.<.> vFixedCoeffs)
+            + ((smCondVar SLA.#> svGroupCoeffs) SLA.<.> svGroupCoeffs)
+        tDist   = S.studentT (realToFrac $ n - 1)
+        tFactor = S.quantile tDist (S.significanceLevel cl / 2)  -- This is negative
+        lower   = totalEffects + (tFactor * sqrt varianceTE)
+        upper   = totalEffects - (tFactor * sqrt varianceTE)
+    return (invLinkF totalEffects, invLinkF lower, invLinkF upper)
 
 
