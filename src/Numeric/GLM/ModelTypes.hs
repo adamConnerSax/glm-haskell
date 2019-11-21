@@ -161,7 +161,7 @@ fitSpecByGroup fixedEffects ebg rowClassifier = do
     $ M.toList ebg
   fmap M.fromList $ traverse makeSpec groupInfoList
 
-data RegressionModelSpec b = RegressionModelSpec { rmsFixedEffects :: (GLM.FixedEffects b)
+data RegressionModelSpec b = RegressionModelSpec { rmsFixedEffects :: GLM.FixedEffects b
                                                  , rmsFixedPredictors :: FixedPredictors
                                                  , rmsObservations :: Observations
                                                  } deriving (Show, Eq)

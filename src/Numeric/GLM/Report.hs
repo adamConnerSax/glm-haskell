@@ -173,19 +173,17 @@ fitted'
   => GLM.MixedModel b g
   -> (q -> b -> Double)
   -> (q -> g -> T.Text)
-  -> GLM.FixedEffects b
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> GLM.BetaU
   -> LA.Vector Double
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted' mm getPred getLabel fes ebg rowClassifier betaU vb row =
+fitted' mm getPred getLabel ebg rowClassifier betaU vb row =
   fst
     <$> GLM.predict' mm
                      (Just . getPred row)
                      (Just . getLabel row)
-                     fes
                      ebg
                      rowClassifier
                      betaU

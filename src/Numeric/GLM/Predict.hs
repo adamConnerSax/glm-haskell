@@ -328,14 +328,14 @@ predict'
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
   -> (g -> Maybe T.Text)
-  -> GLM.FixedEffects b
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> GLM.BetaU
   -> LA.Vector Double -- vb
   -> P.Sem r (Double, Double) -- (prediction, link (prediction))
-predict' mm getPredictorM getLabelM fes ebg rowClassifier betaU vb = do
-  let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
+predict' mm getPredictorM getLabelM ebg rowClassifier betaU vb = do
+  let fes      = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
+      invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
   vFixedCoeffs  <- fixedEffectsCoefficientVector getPredictorM fes
 --  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
   svGroupCoeffs <-
@@ -354,6 +354,8 @@ predict' mm getPredictorM getLabelM fes ebg rowClassifier betaU vb = do
 -- From that we can compute a studentized CI via: eta +/- t(alpha/2)*sqrt(v)
 -- if the inverse-link is F: mu = F(eta) with CI [F(eta - t(alpha/2) * sqrt(v)), F(eta + t(alpha/2) * sqrt(v))]
 -- It's *deeply* approximate.  For better answers, Bootstrap!
+-- TODO: Wald Test??
+
 
 -- Here we compute the conditional covariances of the random/group effects
 -- This is expensive, but not as expensive as bootstrapping
@@ -382,8 +384,6 @@ conditionalCovariances mm cf reCalc vTh betaU = do
                                              (VS.map (GLM.invLink lf) vEta)
   -- reFactorize because the factor gets trashed when we extract L at the end of chomod
       cfs = CH.FactorizeAtAPlusBetaI 1
---      smZS  = GLM.smZS zStar
---      smZSt = SLA.transpose smZS
   liftIO $ CH.spMatrixFactorizeP cholmodC
                                  cholmodF
                                  cfs
@@ -391,7 +391,7 @@ conditionalCovariances mm cf reCalc vTh betaU = do
                                  (SLA.transpose smU)
   smLLtInvLambda <- liftIO
     $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_A smLambdat
-  let smCondVar = smLLtInvLambda SLA.## smLambda --smZSt SLA.#^# smLLtInvLambda
+  let smCondVar = smLLtInvLambda SLA.## smLambda
   return $ sigma2 SLA..* smCondVar
 
 
@@ -400,7 +400,6 @@ predictWithCondVarCI
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
   -> (g -> Maybe T.Text)
-  -> GLM.FixedEffects b
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> GLM.BetaU
@@ -408,10 +407,11 @@ predictWithCondVarCI
   -> S.CL Double
   -> LA.Matrix Double -- Cov_Beta  
   -> ConditionalCovarianceMatrix --Cov_U
-  -> P.Sem r (Double, Double, Double) -- (prediction, lower, upper)
-predictWithCondVarCI mm getPredictorM getLabelM fes ebg rowClassifier betaU vb cl mCovBeta smCondVar
+  -> P.Sem r (Double, (Double, Double)) -- (prediction, lower, upper)
+predictWithCondVarCI mm getPredictorM getLabelM ebg rowClassifier betaU vb cl mCovBeta smCondVar
   = do
-    let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
+    let fes      = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
+        invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
         n        = VS.length $ GLM.observations mm
     vFixedCoeffs  <- fixedEffectsCoefficientVector getPredictorM fes
   --  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
@@ -430,6 +430,6 @@ predictWithCondVarCI mm getPredictorM getLabelM fes ebg rowClassifier betaU vb c
         tFactor = S.quantile tDist (S.significanceLevel cl / 2)  -- This is negative
         lower   = totalEffects + (tFactor * sqrt varianceTE)
         upper   = totalEffects - (tFactor * sqrt varianceTE)
-    return (invLinkF totalEffects, invLinkF lower, invLinkF upper)
+    return (invLinkF totalEffects, (invLinkF lower, invLinkF upper))
 
 

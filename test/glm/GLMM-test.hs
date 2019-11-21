@@ -14,6 +14,7 @@ import qualified Numeric.GLM.FunctionFamily    as GLM
 import           Numeric.GLM.MixedModel
 import qualified Numeric.GLM.Bootstrap         as GLM
 import qualified Numeric.GLM.Predict           as GLM
+import qualified Numeric.GLM.Confidence        as GLM
 import qualified Numeric.GLM.Report            as GLM
 
 import qualified Numeric.SparseDenseConversions
@@ -267,7 +268,7 @@ main = do
     let GLM.FixedEffectStatistics _ mBetaCov = fes_GLMM
     let f r = do
           let obs = getObservation r
-{-          
+{-           
           fitted <- GLM.fitted mm
                                getPredictor
                                groupLabels
@@ -285,26 +286,28 @@ main = do
                                  vb2_GLMM
                                  r
 -}
-          bootWCI <- GLM.bootstrappedConfidence mm
-                                                (Just . getPredictor r)
-                                                (Just . groupLabels r)
-                                                rowClassifier
-                                                effectsByGroup
-                                                (vBetaU2_GLMM, vb2_GLMM)
-                                                bootstraps
-                                                GLM.BCI_Accelerated
-                                                (S.mkCL 0.95)
-          predictCVCI <- GLM.predictWithCondVarCI mm
-                                                  (Just . getPredictor r)
-                                                  (Just . groupLabels r)
-                                                  fixedEffects
-                                                  effectsByGroup
-                                                  rowClassifier
-                                                  vBetaU2_GLMM
-                                                  vb2_GLMM
-                                                  (S.mkCL 0.95)
-                                                  mBetaCov
-                                                  smCondVar
+          bootWCI <- GLM.predictWithCI
+            mm
+            (Just . getPredictor r)
+            (Just . groupLabels r)
+            rowClassifier
+            effectsByGroup
+            vBetaU2_GLMM
+            vb2_GLMM
+            (S.mkCL 0.95)
+            (GLM.BootstrapCI GLM.BCI_Accelerated bootstraps)
+
+
+          predictCVCI <- GLM.predictWithCI
+            mm
+            (Just . getPredictor r)
+            (Just . groupLabels r)
+            rowClassifier
+            effectsByGroup
+            vBetaU2_GLMM
+            vb2_GLMM
+            (S.mkCL 0.95)
+            (GLM.NaiveCondVarCI mBetaCov smCondVar)
 
 
           return (r, obs, bootWCI, predictCVCI)

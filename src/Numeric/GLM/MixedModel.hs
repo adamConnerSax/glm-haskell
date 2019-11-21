@@ -240,51 +240,53 @@ minimizeDevianceInner
        , LA.Vector Double
        , CholeskySolutions
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
-minimizeDevianceInner verbosity dt mm reCalc cf th0 = P.wrapPrefix "minimizeDevianceInner" $ do
-  let
-    pdv = case verbosity of
-      MDVNone   -> PDVNone
-      MDVSimple -> PDVSimple
-    (objectiveOs, finalOs) = if GLM.generalized mm
-      then (Optim_GLMM_PIRLS, Optim_GLMM_Final)
-      else (Optim_LMM, Optim_LMM)
-    pd
-      :: GLM.EffectsIO r
-      => OptimizationStage
-      -> GLM.CovarianceVec
-      -> P.Sem
-           r
-           ( Double
-           , Double
-           , GLM.BetaU
-           , SLA.SpVector Double
-           , CholeskySolutions
-           )
-    pd os x = profiledDeviance pdv cf dt mm reCalc os x
-    obj x =
-      unsafePerformEffects (fmap (\(d, _, _, _, _) -> d) $ pd objectiveOs x) 0
-    levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
-    thetaLB   = thetaLowerBounds levels
-    algorithm = (lmmOptimizerToNLOPT $ GLM.lmmOptimizer $ GLM.lmmControls mm)
-      obj
-      [thetaLB]
-      Nothing
-    stop =
-      NL.ObjectiveAbsoluteTolerance
-          (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)
-        NL.:| []
-    problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
-    eSol    = NL.minimizeLocal problem th0
-  case eSol of
-    Left result -> P.throw (GLM.OtherGLMError $ T.pack $ show result)
-    Right (NL.Solution pdS thS result) -> do
-      P.logLE P.Diagnostic
-        $  "Solution ("
-        <> (T.pack $ show result)
-        <> ") reached! At th="
-        <> (T.pack $ show thS)
-      (pdVal, sigma2, betaU, svb, cs) <- pd finalOs thS
-      return (thS, pdVal, sigma2, betaU, SD.toDenseVector svb, cs)
+minimizeDevianceInner verbosity dt mm reCalc cf th0 =
+  P.wrapPrefix "minimizeDevianceInner" $ do
+    let
+      pdv = case verbosity of
+        MDVNone   -> PDVNone
+        MDVSimple -> PDVSimple
+      (objectiveOs, finalOs) = if GLM.generalized mm
+        then (Optim_GLMM_PIRLS, Optim_GLMM_Final)
+        else (Optim_LMM, Optim_LMM)
+      pd
+        :: GLM.EffectsIO r
+        => OptimizationStage
+        -> GLM.CovarianceVec
+        -> P.Sem
+             r
+             ( Double
+             , Double
+             , GLM.BetaU
+             , SLA.SpVector Double
+             , CholeskySolutions
+             )
+      pd os x = profiledDeviance pdv cf dt mm reCalc os x
+      obj x = unsafePerformEffects
+        (fmap (\(d, _, _, _, _) -> d) $ pd objectiveOs x)
+        0
+      levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
+      thetaLB   = thetaLowerBounds levels
+      algorithm = (lmmOptimizerToNLOPT $ GLM.lmmOptimizer $ GLM.lmmControls mm)
+        obj
+        [thetaLB]
+        Nothing
+      stop =
+        NL.ObjectiveAbsoluteTolerance
+            (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)
+          NL.:| []
+      problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
+      eSol    = NL.minimizeLocal problem th0
+    case eSol of
+      Left result -> P.throw (GLM.OtherGLMError $ T.pack $ show result)
+      Right (NL.Solution pdS thS result) -> do
+        P.logLE P.Diagnostic
+          $  "Solution ("
+          <> (T.pack $ show result)
+          <> ") reached! At th="
+          <> (T.pack $ show thS)
+        (pdVal, sigma2, betaU, svb, cs) <- pd finalOs thS
+        return (thS, pdVal, sigma2, betaU, SD.toDenseVector svb, cs)
 
 
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
@@ -985,11 +987,11 @@ spUV mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar vEta =
 -- glmer: sqrtWrkWt
 weightsForUV :: GLM.MixedModel b g -> GLM.WMatrix -> GLM.EtaVec -> GLM.WMatrix
 weightsForUV mm vW vEta =
-  let lf        = GLM.linkFunction $ linkFunctionType mm
-      vMu       = VS.map (GLM.invLink lf) vEta
-      vdMudEta  = VS.map (GLM.derivInv lf) vEta
-      vVariance = GLM.scaledVariance (observationsDistribution mm) vMu
-      vVSW      = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu --    
+  let lf       = GLM.linkFunction $ linkFunctionType mm
+      vMu      = VS.map (GLM.invLink lf) vEta
+      vdMudEta = VS.map (GLM.derivInv lf) vEta
+--      vVariance = GLM.scaledVariance (observationsDistribution mm) vMu
+      vVSW     = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu --    
   in  VS.zipWith (\muEta vsw -> muEta * sqrt vsw) vdMudEta vVSW
 --    VS.zipWith3 (\w muEta var -> muEta * sqrt (w / var)) vW vdMudEta vVariance
 

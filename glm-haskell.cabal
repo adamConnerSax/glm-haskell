@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d25aa0f03432d58521f8076c35680c50da88bab898e67ddad01602a4770428d7
+-- hash: 37acb52865c469cf8a0f6dc00ff219d85454bef50ff1f077ba586916d5e3cb3d
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -38,6 +38,7 @@ library
       Data.IndexedSet
       Numeric.GLM.Bootstrap
       Numeric.GLM.ComputeTypes
+      Numeric.GLM.Confidence
       Numeric.GLM.FunctionFamily
       Numeric.GLM.MixedModel
       Numeric.GLM.ModelTypes

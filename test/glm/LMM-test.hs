@@ -198,13 +198,12 @@ main = do
           fitted' <- GLM.fitted' (lmm mm)
                                  getPredictor
                                  groupLabels
-                                 fixedEffects
                                  effectsByGroup
                                  rowClassifier
                                  vBetaU2_ML
                                  vb2_ML
                                  r
-          return (r,obs, fitted, fitted')
+          return (r, obs, fitted, fitted')
     fitted <- traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ (L.intercalate "\n" $ fmap show fitted)
 

@@ -201,12 +201,13 @@ bootstrappedConfidence
   -> (g -> Maybe T.Text)
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
-  -> (GLM.BetaU, VS.Vector Double) -- fit result
+  -> GLM.BetaU
+  -> VS.Vector Double --vb
   -> [(GLM.BetaU, VS.Vector Double)] -- bootstrap fits
   -> BootstrapCIType
   -> S.CL Double
   -> P.Sem r (Double, (Double, Double))
-bootstrappedConfidence mm getPredM getLabelM rc ebg (fitBetaU, fitvb) bootstraps ciType cl
+bootstrappedConfidence mm getPredM getLabelM rc ebg fitBetaU fitvb bootstraps ciType cl
   = do
     let predict = GLM.predictFromBetaUB mm getPredM getLabelM rc ebg
     fitX        <- predict fitBetaU fitvb
