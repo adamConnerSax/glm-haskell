@@ -34,6 +34,7 @@ module Numeric.GLM.ModelTypes
   , lmmControls
   , generalized
   , fixedPredictors
+  , weights
   , observations
   , changeMMObservations
   , RandomEffectModelMatrix
@@ -252,6 +253,7 @@ generalized :: MixedModel b g -> Bool
 generalized (LinearMixedModel            _) = False
 generalized (GeneralizedLinearMixedModel _) = True
 
+
 fixedPredictors :: MixedModel b g -> FixedPredictors
 fixedPredictors = rmsFixedPredictors . regressionModelSpec
 
@@ -263,6 +265,10 @@ changeMMObservations os (LinearMixedModel lmms) =
   LinearMixedModel (changeLMMSObservations os lmms)
 changeMMObservations os (GeneralizedLinearMixedModel glmms) =
   GeneralizedLinearMixedModel (changeGLMMSObservations os glmms)
+
+weights :: MixedModel b g -> WMatrix
+weights mm@(LinearMixedModel _) = VS.replicate (VS.length $ observations mm) 1
+weights (GeneralizedLinearMixedModel glmms) = glmmsWeights glmms
 
 type RandomEffectModelMatrix = SLA.SpMatrix Double
 type CovarianceVec = LA.Vector Double

@@ -113,8 +113,19 @@ devScale
   -> LA.Vector Double
   -> LA.Vector Double
   -> LA.Vector Double
-  -> LA.Vector Double
+  -> Double
 devScale od vW vY vMu =
+  let vDev = devScaleVec od vW vY vMu
+  in (VS.sum vDev)/(realToFrac $ VS.length vMu)
+
+
+devScaleVec
+  :: ObservationsDistribution
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> LA.Vector Double
+  -> LA.Vector Double
+devScaleVec od vW vY vMu =
   let n   = LA.size vW
       dev = deviance od vW vY vMu
   in  case od of
@@ -137,7 +148,7 @@ devianceCondAbs
   -> LA.Vector Double
   -> Double
 devianceCondAbs od vW vY vMu =
-  let vDev = devScale od vW vY vMu in -2 * logLikelihood od vW vY vMu vDev
+  let vDev = devScaleVec od vW vY vMu in -2 * logLikelihood od vW vY vMu vDev
 
 
 logLikelihoodOne

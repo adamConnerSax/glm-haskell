@@ -257,8 +257,11 @@ main = do
                                           (sqrt sigma2_GLMM)
                                           10
                                           True
+    smCondVar <- GLM.conditionalCovariances mm cf randomEffectCalc th2_GLMM vBetaU2_GLMM
+    let GLM.FixedEffectStatistics _ mBetaCov = fes_GLMM
     let f r = do
           let obs = getObservation r
+{-          
           fitted <- GLM.fitted mm
                                getPredictor
                                groupLabels
@@ -275,7 +278,7 @@ main = do
                                  vBetaU2_GLMM
                                  vb2_GLMM
                                  r
-{-                     
+-}                     
           bootWCI <- GLM.bootstrappedConfidence mm
                                                 (Just . getPredictor r)
                                                 (Just . groupLabels r)
@@ -285,8 +288,20 @@ main = do
                                                 bootstraps
                                                 GLM.BCI_Accelerated
                                                 (S.mkCL 0.95)
--}
-          return (obs, fitted, fitted')
+          predictCVCI <- GLM.predictWithCondVarCI mm
+                         (Just . getPredictor r)
+                         (Just . groupLabels r)
+                         fixedEffects
+                         effectsByGroup
+                         rowClassifier
+                         vBetaU2_GLMM
+                         vb2_GLMM
+                         (S.mkCL 0.95)
+                         mBetaCov
+                         smCondVar
+                         
+
+          return (r, obs, bootWCI, predictCVCI)
 
     fitted <- traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ (L.intercalate "\n" $ fmap show fitted)

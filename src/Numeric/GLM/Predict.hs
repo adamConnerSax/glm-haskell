@@ -15,6 +15,9 @@ import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Numeric.SparseDenseConversions
                                                as SD
 
+import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
+                                               as CH
+
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 import qualified Knit.Effect.Logger            as P
@@ -34,6 +37,9 @@ import qualified Numeric.LinearAlgebra.Class   as SLA
 
 import qualified Numeric.LinearAlgebra         as LA
 
+import qualified Statistics.Types              as S
+import qualified Statistics.Distribution       as S
+import qualified Statistics.Distribution.StudentT           as S
 
 import qualified Data.Text                     as T
 import qualified Data.Vector.Storable          as VS
@@ -74,7 +80,7 @@ fixedEffectStatistics
   -> GLM.FixedEffectStatistics b
 fixedEffectStatistics mm sigma2 (GLM.CholeskySolutions _ _ mRX) betaU =
   let fep       = fixedEffectParameters mm betaU
-      effSigma2 = case GLM.observationDistribution mm of
+      effSigma2 = case GLM.observationsDistribution mm of
         GLM.Normal -> sigma2
         _          -> 1
       covs = LA.scale effSigma2 $ (LA.inv mRX) LA.<> (LA.inv $ LA.tr mRX)
@@ -125,7 +131,7 @@ effectCovariancesByGroup
   -> P.Sem r (GLM.EffectCovariancesByGroup g b)
 effectCovariancesByGroup ebg mm sigma2 vTh = do
   let
-    effSigma2 = case GLM.observationDistribution mm of
+    effSigma2 = case GLM.observationsDistribution mm of
       GLM.Normal -> sigma2
       _          -> 1
     groups = M.keys ebg
@@ -347,7 +353,71 @@ predict' mm getPredictorM getLabelM fes ebg rowClassifier betaU vb = do
 -- if the inverse-link is F: mu = F(eta) with CI [F(eta - t(alpha/2) * sqrt(v)), F(eta + t(alpha/2) * sqrt(v))]
 -- It's *deeply* approximate.  For better answers, Bootstrap!
 
+-- Here we compute the conditional covariances of the random/group effects
+-- This is expensive, but not as expensive as bootstrapping
+type ConditionalCovarianceMatrix = SLA.SpMatrix Double
+
+conditionalCovariances
+  :: GLM.EffectsIO r
+  => GLM.MixedModel b g
+  -> GLM.CholmodFactor
+  -> GLM.RandomEffectCalculated
+  -> GLM.CovarianceVec
+  -> GLM.BetaU
+  -> P.Sem r ConditionalCovarianceMatrix
+conditionalCovariances mm cf reCalc vTh betaU = do
+  let (cholmodC, cholmodF, _) = cf
+      mX =  GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+      zStar = GLM.makeZS reCalc vTh
+      vEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
+      (smU, _) = GLM.spUV mm zStar vEta
+      lf        = GLM.linkFunction $ GLM.linkFunctionType mm
+      sigma2 = GLM.devScale
+        (GLM.observationsDistribution mm)
+        (GLM.weights mm)
+        (GLM.observations mm)
+        (VS.map (GLM.invLink lf) vEta)
+  -- reFactorize because the factor gets trashed when we extract L at the end of chomod
+      cfs = CH.FactorizeAtAPlusBetaI 1
+      smZSt = SLA.transpose $ GLM.smZS zStar
+  liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric (SLA.transpose smU)    
+  smLLtInvLambda <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_A smZSt
+  let smCondVar = smZSt SLA.#^# smLLtInvLambda
+  return $  sigma2 SLA..* smCondVar
 
 
+predictWithCondVarCI
+  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  => GLM.MixedModel b g
+  -> (b -> Maybe Double)
+  -> (g -> Maybe T.Text)
+  -> GLM.FixedEffects b
+  -> GLM.EffectsByGroup g b
+  -> GLM.RowClassifier g
+  -> GLM.BetaU
+  -> LA.Vector Double -- vb
+  -> S.CL Double
+  -> LA.Matrix Double -- Cov_Beta  
+  -> ConditionalCovarianceMatrix --Cov_U
+  -> P.Sem r (Double, Double, Double) -- (prediction, lower, upper)
+predictWithCondVarCI mm getPredictorM getLabelM fes ebg rowClassifier betaU vb cl mCovBeta smCondVar = do
+  let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
+      n = VS.length $ GLM.observations mm
+  vFixedCoeffs <- fixedEffectsCoefficientVector getPredictorM fes
+--  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
+  svGroupCoeffs <-
+    SLA.fromListSV (VS.length vb)
+      <$> indexedGroupCoefficients getPredictorM getLabelM ebg rowClassifier
+--  P.logLE P.Diagnostic $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
+  let svb = SD.toSparseVector vb
+      totalEffects =
+        (vFixedCoeffs LA.<.> (GLM.bu_vBeta betaU)) + (svGroupCoeffs SLA.<.> svb)
+      varianceTE = ((mCovBeta LA.#> vFixedCoeffs) LA.<.> vFixedCoeffs) +
+                   ((smCondVar SLA.#> svGroupCoeffs) SLA.<.> svGroupCoeffs)
+      tDist   = S.studentT (realToFrac $ n - 1)
+      tFactor = S.quantile tDist (S.significanceLevel cl / 2)  -- This is negative
+      lower = totalEffects + (tFactor * sqrt varianceTE)
+      upper = totalEffects - (tFactor * sqrt varianceTE)
+  return (invLinkF totalEffects, invLinkF lower, invLinkF upper)
 
 

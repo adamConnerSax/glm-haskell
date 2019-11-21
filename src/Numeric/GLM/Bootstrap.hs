@@ -156,7 +156,7 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
       return queue
 -}
     let generateOne =
-          generateSamples (GLM.observationDistribution mm0) vMuSol devSol
+          generateSamples (GLM.observationsDistribution mm0) vMuSol devSol
 
         solveOne (n, newMM) =
           P.wrapPrefix ("Bootstrap (" <> (T.pack $ show n) <> ")") $ do

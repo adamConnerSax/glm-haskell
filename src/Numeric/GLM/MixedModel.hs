@@ -732,9 +732,9 @@ cholmodCholeskySolutionsLMM cholmodFactor mixedModelSpec zStar = do
                             NormalEquationsLMM
                             mixedModelSpec
 
-observationDistribution :: GLM.MixedModel b g -> GLM.ObservationsDistribution
-observationDistribution (GLM.LinearMixedModel _) = GLM.Normal
-observationDistribution (GLM.GeneralizedLinearMixedModel glmmSpec) =
+observationsDistribution :: GLM.MixedModel b g -> GLM.ObservationsDistribution
+observationsDistribution (GLM.LinearMixedModel _) = GLM.Normal
+observationsDistribution (GLM.GeneralizedLinearMixedModel glmmSpec) =
   GLM.glmmsObservationsDistribution glmmSpec
 
 useLink :: GLM.MixedModel b g -> GLM.UseLink
@@ -745,7 +745,7 @@ useLink (GLM.GeneralizedLinearMixedModel glmmSpec) =
 linkFunctionType :: GLM.MixedModel b g -> GLM.LinkFunctionType
 linkFunctionType mm = case useLink mm of
   GLM.UseOther x   -> x
-  GLM.UseCanonical -> GLM.canonicalLink $ observationDistribution mm
+  GLM.UseCanonical -> GLM.canonicalLink $ observationsDistribution mm
 
 getCholeskySolutions
   :: GLM.EffectsIO r
@@ -988,8 +988,8 @@ weightsForUV mm vW vEta =
   let lf        = GLM.linkFunction $ linkFunctionType mm
       vMu       = VS.map (GLM.invLink lf) vEta
       vdMudEta  = VS.map (GLM.derivInv lf) vEta
-      vVariance = GLM.scaledVariance (observationDistribution mm) vMu
-      vVSW      = GLM.varianceScaledWeights (observationDistribution mm) vW vMu --    
+      vVariance = GLM.scaledVariance (observationsDistribution mm) vMu
+      vVSW      = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu --    
   in  VS.zipWith (\muEta vsw -> muEta * sqrt vsw) vdMudEta vVSW
 --    VS.zipWith3 (\w muEta var -> muEta * sqrt (w / var)) vW vdMudEta vVariance
 
@@ -1012,7 +1012,7 @@ compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar vEta svU
         lf        = GLM.linkFunction $ linkFunctionType mm
         (smU, mV) = spUV mm zStar vEta
         vMu       = VS.map (GLM.invLink lf) vEta
-        vVarW = GLM.varianceScaledWeights (observationDistribution mm) vW vMu
+        vVarW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
         neqs      = NormalEquationsGLMM vVarW lf vEta svU
     (chol, dBetaU) <- cholmodCholeskySolutions' cf
                                                 (SLA.transpose smU)
@@ -1098,19 +1098,6 @@ betaFrom mX zStar svU vEta =
       vRhs = LA.tr mX LA.#> (vEta - vZSu)
       cXtX = LA.chol $ LA.trustSym $ LA.tr mX LA.<> mX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
-{-
-glmmCholeskyStep
-  :: CholmodFactor
-  -> NormalEquations
-  -> MixedModel
-  -> WMatrix
-  -> LinkFunctionType
-  -> SLA.SpVector Double
-  -> SLA.SpVector Double
-  -> IO CholeskySolutions
-glmmCholeskyStep mm vW lft svBeta svU =
--}
-
 
 cholmodCholeskySolutions'
   :: GLM.EffectsIO r
@@ -1132,17 +1119,6 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
     -- TODO: Cholmod has built in support for factorizing XtX + a * I.  Use it.
     let cfs = CH.FactorizeAtAPlusBetaI 1
     liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt
-{-
-    let cfs = CH.FactorizeA
-    liftIO
-      $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.SquareSymmetricLower
-      $ SLA.filterSM lowerTriangular
-      $ xTxPlusI
-      $ smU
--}
---    P.logLE P.Diagnostic "After factorize..."
-    -- compute Rzx
---    P.logLE P.Diagnostic "Calling normal equations."
     (svRhsZ, vRhsX) <- normalEquationsRHS nes smUt (LA.tr mV) vY
   {-  P.logLE P.Diagnostic
       $  "Normal Equation RHS:\nsmPRhsZ="
