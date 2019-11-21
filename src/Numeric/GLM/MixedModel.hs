@@ -240,7 +240,7 @@ minimizeDevianceInner
        , LA.Vector Double
        , CholeskySolutions
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
-minimizeDevianceInner verbosity dt mm reCalc cf th0 = do
+minimizeDevianceInner verbosity dt mm reCalc cf th0 = P.wrapPrefix "minimizeDevianceInner" $ do
   let
     pdv = case verbosity of
       MDVNone   -> PDVNone
@@ -501,6 +501,7 @@ profiledDeviance
        ) -- ^ (pd, sigma^2, beta, u, b) 
 profiledDeviance verbosity cf dt mm reCalc os vTh =
   P.wrapPrefix "profiledDeviance" $ do
+    P.logLE P.Diagnostic $ "here"
     liftIO $ hSetBuffering stdout NoBuffering
     let mX     = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         smZ    = GLM.recModelMatrix reCalc
@@ -669,7 +670,7 @@ normalEquationsRHS
 normalEquationsRHS NormalEquationsLMM smUt mVt vY =
   P.wrapPrefix "normalEquationsRHS" $ do
     let svRhsZ = smUt SLA.#> SD.toSparseVector vY
-        vRhsX  = LA.tr mVt LA.#> vY
+        vRhsX  = mVt LA.#> vY
 --    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svRhsZ, vRhsX))
     return (svRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 

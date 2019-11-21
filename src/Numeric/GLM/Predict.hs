@@ -260,7 +260,7 @@ indexedGroupCoefficients
   -> P.Sem r [(Int, Double)]
 indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
   gOffsets <- groupOffsets rc ebg
-  P.logLE P.Info $ T.pack $ show gOffsets
+  --P.logLE P.Info $ "offsets=" <> (T.pack $ show gOffsets)
   let vecLength = FL.fold FL.sum gOffsets
   -- get a list of groups    
   let
@@ -290,8 +290,9 @@ indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
             )
             Right
         $ M.lookup g ebg
+      let nEffects = IS.size groupEffectsIndex
       gIndex <- groupIndex g
-      let groupOffset = if gIndex == 0 then 0 else gOffsets !! (gIndex - 1)
+      let groupOffset = gOffsets !! gIndex
       case getLabelM g of
         Nothing -> P.logLE P.Info ("No entry for group=" <> (T.pack $ show g))
           >> return []
@@ -307,11 +308,11 @@ indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
           Just catOffset -> do
             effectCoeffs <- effectsCoefficientVector getPredictorM
                                                      groupEffectsIndex
-            let vecIndices = fmap (\n -> groupOffset + catOffset + n)
+            let vecIndices = fmap (\n -> groupOffset + (catOffset * nEffects) + n)
                                   [0 .. (VS.length effectCoeffs - 1)]
             return $ zip vecIndices (VS.toList effectCoeffs)
   indexedSparseVecEntries <- concat <$> traverse getIndexedCoeffs groups
-  P.logLE P.Info $ T.pack $ show indexedSparseVecEntries
+  --P.logLE P.Diagnostic $ T.pack $ show indexedSparseVecEntries
   return indexedSparseVecEntries
 
 predict'
@@ -328,11 +329,11 @@ predict'
 predict' mm getPredictorM getLabelM fes ebg rowClassifier betaU vb = do
   let invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
   vFixedCoeffs <- fixedEffectsCoefficientVector getPredictorM fes
-  P.logLE P.Info $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
+--  P.logLE P.Diagnostic $ "vFixed=" <> (T.pack $ show vFixedCoeffs)
   svGroupCoeffs <-
     SLA.fromListSV (VS.length vb)
       <$> indexedGroupCoefficients getPredictorM getLabelM ebg rowClassifier
-  P.logLE P.Info $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
+--  P.logLE P.Diagnostic $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
   let svb = SD.toSparseVector vb
       totalEffects =
         (vFixedCoeffs LA.<.> (GLM.bu_vBeta betaU)) + (svGroupCoeffs SLA.<.> svb)

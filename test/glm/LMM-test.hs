@@ -42,7 +42,7 @@ import           System.IO                      ( hSetBuffering
                                                 , BufferMode(..)
                                                 )
 
-verbose = True
+verbose = False
 
 throwEither
   :: (P.Member (P.Error GLM.GLMError) r) => Either GLM.GLMError a -> P.Sem r a
@@ -58,7 +58,7 @@ main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
   let lmmControls = GLM.defaultLMMControls
-
+{-
   frame <- defaultLoadToFrame @'[Rail, Travel] railCSV (const True)
   let getObservation = realToFrac . F.rgetField @Travel
       fixedEffects :: GLM.FixedEffects ()
@@ -70,7 +70,7 @@ main = do
       lmm x = GLM.LinearMixedModel (GLM.LinearMixedModelSpec x lmmControls)
 --        LMM x lmmControls
       useLink = GLM.UseCanonical
-
+-}
 {-
   frame <- defaultLoadToFrame @'[Reaction, Days, Subject] sleepStudyCSV
                                                           (const True)
@@ -83,11 +83,11 @@ main = do
     groupLabels    = sleepStudyGroupLabels
     effectsByGroup = M.fromList
       [(SSG_Subject, IS.fromList [GLM.Intercept, GLM.Predictor SleepStudyDays])]
-    glmm x = LMM x lmmControls
+    lmm x = GLM.LinearMixedModel (GLM.LinearMixedModelSpec x lmmControls)
     useLink = GLM.UseCanonical
 
 -}
-{-
+
   frame <- defaultLoadToFrame @'[Block, Variety, Nitro, Yield] oatsCSV
                                                                (const True)
   let getObservation = realToFrac . F.rgetField @Yield
@@ -100,9 +100,9 @@ main = do
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
-      glmm x = LMM x lmmControls
+      lmm x = GLM.LinearMixedModel (GLM.LinearMixedModelSpec x lmmControls)
       useLink = GLM.UseCanonical
--}
+
 
   resultEither <- runEffectsIO $ do
     let (vY, mX, rcM) = FL.fold
@@ -204,9 +204,9 @@ main = do
                                  vBetaU2_ML
                                  vb2_ML
                                  r
-          return (obs, fitted, fitted')
+          return (r,obs, fitted, fitted')
     fitted <- traverse f (FL.fold FL.list frame)
-    liftIO $ putStrLn $ "Fitted:\n" ++ show fitted
+    liftIO $ putStrLn $ "Fitted:\n" ++ (L.intercalate "\n" $ fmap show fitted)
 
     when verbose $ do
       cholmodFactor <- cholmodAnalyzeProblem randomEffectCalc
