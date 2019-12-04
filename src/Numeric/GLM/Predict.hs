@@ -310,12 +310,12 @@ indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
       case getLabelM g of
         Nothing -> P.logLE P.Info ("No entry for group=" <> (T.pack $ show g))
           >> return []
-        Just label -> case GLM.categoryNumberFromLabel rc label g of
+        Just key -> case GLM.categoryNumberFromKey rc key g of
           Nothing ->
             P.throw
               $  GLM.OtherGLMError
               $  "Failed to find \""
-              <> (T.pack $ show label)
+              <> (T.pack $ show key)
               <> "\" in group=\""
               <> (T.pack $ show g)
               <> "\". This is BAD."

@@ -1,9 +1,11 @@
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ConstraintKinds      #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE GADTs                #-}
+{-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE PolyKinds            #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE StandaloneDeriving   #-}
+{-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Numeric.GLM.ProblemTypes
   ( PredictorC
@@ -25,7 +27,7 @@ module Numeric.GLM.ProblemTypes
   , EffectsByGroup
   , groupEffects
   , categoryNumberFromRowIndex
-  , categoryNumberFromLabel
+  , categoryNumberFromKey
   , FixedEffectParameters(..)
   , FixedEffectStatistics(..)
   , GroupEffectCovariances(..)
@@ -141,7 +143,7 @@ indexedFixedEffectSet InterceptOnly    = IS.fromList [Intercept]
 indexedFixedEffectSet (FixedEffects x) = x
 
 -- | All types used as groups must define an instance of this family
-type family GroupKey g :: Type
+type family GroupKey (g :: k) :: Type
 
 type GroupC g = (Show g, Ord g, Show (GroupKey g), Ord (GroupKey g))
 
@@ -158,8 +160,8 @@ groupEffectIndex
   :: (Ord g, Ord b) => EffectsByGroup g b -> g -> (WithIntercept b) -> Maybe Int
 groupEffectIndex ebg group effect = M.lookup group ebg >>= flip IS.index effect
 
-data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show)
-
+data ItemInfo g = ItemInfo { itemIndex :: Int, itemKey :: GroupKey g }
+deriving instance Show (GroupKey g) => Show (ItemInfo g)
 {-
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
 The IndexedSet has our map to and from Int, i.e., the position in the vectors
@@ -169,7 +171,7 @@ a specific category in a group to its category index
 -}
 
 data RowClassifier g where
-  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> M.Map g (M.Map (GroupKey g) Int) -> RowClassifier g
+  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector (ItemInfo g)) -> M.Map g (M.Map (GroupKey g) Int) -> RowClassifier g
 
 -- get the row category for a given row and group
 categoryNumberFromRowIndex :: Ord g => RowClassifier g -> Int -> g -> Maybe Int
@@ -178,14 +180,14 @@ categoryNumberFromRowIndex (RowClassifier groupIndices _ rowClassifierV _) rowIn
     vectorIndex <- groupIndices `IS.index` group
     return $ itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex  
 
-categoryNumberFromLabel
+categoryNumberFromKey
   :: (Ord g, Ord (GroupKey g))
   => RowClassifier g
   -> GroupKey g
   -> g
   -> Maybe Int
-categoryNumberFromLabel (RowClassifier _ _ _ categoryIndexByGroup) label group
-  = M.lookup group categoryIndexByGroup >>= M.lookup label
+categoryNumberFromKey (RowClassifier _ _ _ categoryIndexByGroup) key group =
+  M.lookup group categoryIndexByGroup >>= M.lookup key
 
 instance (Show g, Show (GroupKey g)) => Show (RowClassifier g) where
   show (RowClassifier indices sizes infos labelMaps) = "RowClassifier " ++ show indices ++ " " ++ show sizes ++ " " ++ show infos ++ " " ++ show labelMaps
@@ -199,7 +201,7 @@ groupSize rc group = eitherLookup group (groupSizes rc)
 groupIndices :: RowClassifier g -> IS.IndexedSet g
 groupIndices (RowClassifier groupIndices _ _ _) = groupIndices
 
-rowInfos :: RowClassifier g -> VB.Vector (VB.Vector ItemInfo)
+rowInfos :: RowClassifier g -> VB.Vector (VB.Vector (ItemInfo g))
 rowInfos (RowClassifier _ _ infos _) = infos
 
 labelMaps

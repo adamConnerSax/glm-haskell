@@ -51,9 +51,13 @@ railPredictor :: RailRow -> () -> Double
 railPredictor _ _ = undefined -- we need something of this type but if this gets called something has gone wrong!
 
 data RailGroup = RG_Rail deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+type instance GLM.GroupKey RailGroup = T.Text
+
 railGroupLabels :: RailRow -> RailGroup -> T.Text
 railGroupLabels row group = case group of
   RG_Rail -> F.rgetField @Rail row
+
+
 
 --
 
@@ -67,9 +71,12 @@ sleepStudyPredictor :: SleepStudyRow -> SleepStudyPredictor -> Double
 sleepStudyPredictor r _ = realToFrac $ F.rgetField @Days r
 
 data SleepStudyGroup = SSG_Subject deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+type instance GLM.GroupKey SleepStudyGroup = T.Text
+
 sleepStudyGroupLabels :: SleepStudyRow -> SleepStudyGroup -> T.Text
 sleepStudyGroupLabels row group = case group of
   SSG_Subject -> T.pack . show $ F.rgetField @Subject row
+
 
 --
 
@@ -83,11 +90,14 @@ getOatsPredictor :: OatsRow -> OatsPredictor -> Double
 getOatsPredictor r _ = F.rgetField @Nitro r
 
 data OatsGroup = OG_Block | OG_VarietyBlock deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+type instance GLM.GroupKey OatsGroup = T.Text
 
 oatsGroupLabels :: OatsRow -> OatsGroup -> T.Text
 oatsGroupLabels row group = case group of
   OG_Block        -> F.rgetField @Block row
   OG_VarietyBlock -> F.rgetField @Variety row <> "_" <> F.rgetField @Block row
+
+
 
 --
 
@@ -101,10 +111,10 @@ getCbppPredictor :: CbppRow -> CbppPredictor -> Double
 getCbppPredictor r _ = realToFrac $ F.rgetField @Period r
 
 data CbppGroup = CbppHerd deriving (Show, Enum, Bounded, Eq, Ord, A.Ix)
+type instance GLM.GroupKey CbppGroup = T.Text
 
 cbppGroupLabels :: CbppRow -> CbppGroup -> T.Text
 cbppGroupLabels r _ = T.pack $ show $ F.rgetField @Herd r
-
 --
 
 loadToFrame
@@ -139,12 +149,12 @@ defaultLoadToFrame = loadToFrame F.defaultParser
 
 lmePrepFrame
   :: forall p g rs
-   . (Bounded p, Enum p, Ord g, Show g)
+   . (GLM.PredictorC p, GLM.GroupC g)
   => (F.Record rs -> Double) -- ^ observations
   -> GLM.FixedEffects p
   -> IS.IndexedSet g
   -> (F.Record rs -> p -> Double) -- ^ predictors
-  -> (F.Record rs -> g -> Text)  -- ^ classifiers
+  -> (F.Record rs -> g -> GLM.GroupKey g)  -- ^ classifiers
   -> FL.Fold
        (F.Record rs)
        ( LA.Vector Double
@@ -154,24 +164,25 @@ lmePrepFrame
 lmePrepFrame observationF fe groupIndices getPredictorF classifierLabelF
   = let
       makeInfoVector
-        :: M.Map g (M.Map T.Text Int)
-        -> M.Map g T.Text
-        -> Either Text (VB.Vector GLM.ItemInfo)
-      makeInfoVector indexMaps labels =
+        :: M.Map g (M.Map (GLM.GroupKey g) Int)
+        -> M.Map g (GLM.GroupKey g)
+        -> Either Text (VB.Vector (GLM.ItemInfo g))
+      makeInfoVector indexMaps groupKeys =
         let
-          g (grp, label) =
+          g (grp, groupKey) =
             GLM.ItemInfo
-              <$> (maybe (Left $ "Failed on " <> (T.pack $ show (grp, label)))
-                         Right
-                  $ M.lookup grp indexMaps
-                  >>= M.lookup label
+              <$> (   maybe
+                      (Left $ "Failed on " <> (T.pack $ show (grp, groupKey)))
+                      Right
+                  $   M.lookup grp indexMaps
+                  >>= M.lookup groupKey
                   )
-              <*> pure label
-        in  fmap VB.fromList $ traverse g $ M.toList labels
+              <*> pure groupKey
+        in  fmap VB.fromList $ traverse g $ M.toList groupKeys
       makeRowClassifier
         :: Traversable f
-        => M.Map g (M.Map T.Text Int)
-        -> f (M.Map g T.Text)
+        => M.Map g (M.Map (GLM.GroupKey g) Int)
+        -> f (M.Map g (GLM.GroupKey g))
         -> Either Text (GLM.RowClassifier g)
       makeRowClassifier indexMaps labels = do
         let sizes = fmap M.size indexMaps
@@ -186,7 +197,7 @@ lmePrepFrame observationF fe groupIndices getPredictorF classifierLabelF
         GLM.FixedEffects indexedFixedEffects ->
           fmap (getPredictorF' row) $ IS.members indexedFixedEffects
         GLM.InterceptOnly -> [1]
-      getClassifierLabels :: F.Record rs -> M.Map g T.Text
+      getClassifierLabels :: F.Record rs -> M.Map g (GLM.GroupKey g)
       getClassifierLabels r =
         M.fromList $ fmap (\g -> (g, classifierLabelF r g)) $ IS.members
           groupIndices
@@ -206,9 +217,9 @@ lmePrepFrame observationF fe groupIndices getPredictorF classifierLabelF
 
 
 addOne
-  :: Ord g
-  => (g, T.Text)
-  -> ST.State (M.Map g Int, M.Map g (M.Map T.Text Int)) ()
+  :: GLM.GroupC g
+  => (g, GLM.GroupKey g)
+  -> ST.State (M.Map g Int, M.Map g (M.Map (GLM.GroupKey g) Int)) ()
 addOne (grp, label) = do
   (nextIndexMap, groupIndexMaps) <- ST.get
   let groupIndexMap = fromMaybe M.empty $ M.lookup grp groupIndexMaps
@@ -223,14 +234,14 @@ addOne (grp, label) = do
     _ -> return ()
 
 addMany
-  :: (Ord g, Traversable h)
-  => h (g, T.Text)
-  -> ST.State (M.Map g Int, M.Map g (M.Map T.Text Int)) ()
+  :: (GLM.GroupC g, Traversable h)
+  => h (g, GLM.GroupKey g)
+  -> ST.State (M.Map g Int, M.Map g (M.Map (GLM.GroupKey g) Int)) ()
 addMany x = traverse addOne x >> return ()
 
 addAll
-  :: Ord g
-  => [M.Map g T.Text]
-  -> ST.State (M.Map g Int, M.Map g (M.Map T.Text Int)) ()
+  :: GLM.GroupC g
+  => [M.Map g (GLM.GroupKey g)]
+  -> ST.State (M.Map g Int, M.Map g (M.Map (GLM.GroupKey g) Int)) ()
 addAll x = traverse (addMany . M.toList) x >> return ()
 
