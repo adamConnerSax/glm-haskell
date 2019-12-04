@@ -195,10 +195,10 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
 data BootstrapCIType = BCI_Student | BCI_Percentile | BCI_Pivot | BCI_ExpandedPercentile | BCI_Accelerated
 
 bootstrappedConfidence
-  :: (Enum b, Bounded b, Ord b, Ord g, Show g, Show b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
   -> GLM.BetaU

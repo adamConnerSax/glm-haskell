@@ -63,7 +63,7 @@ eitherToSem :: GLM.Effects r => Either T.Text a -> P.Sem r a
 eitherToSem = either (P.throw . GLM.OtherGLMError) return
 
 fixedEffectParameters
-  :: (Ord b, Enum b, Bounded b)
+  :: GLM.PredictorC b
   => GLM.MixedModel b g --GLM.FixedEffects b
   -> GLM.BetaU
   -> GLM.FixedEffectParameters b
@@ -73,7 +73,7 @@ fixedEffectParameters mm (GLM.BetaU vBeta _) =
   in  GLM.FixedEffectParameters fe means
 
 fixedEffectStatistics
-  :: (Ord b, Enum b, Bounded b)
+  :: GLM.PredictorC b
   => GLM.MixedModel b g --GLM.FixedEffects b
   -> Double
   -> GLM.CholeskySolutions
@@ -124,7 +124,14 @@ effectParametersByGroup rc epg vb = do
 
 
 effectCovariancesByGroup
-  :: (Ord g, Show g, Enum b, Bounded b, Show b, GLM.Effects r)
+  :: ( Ord g
+     , Show g
+     , Ord (GLM.GroupKey g)
+     , Enum b
+     , Bounded b
+     , Show b
+     , GLM.Effects r
+     )
   => GLM.EffectsByGroup g b
   -> GLM.MixedModel b g
   -> Double
@@ -156,10 +163,10 @@ effectCovariancesByGroup ebg mm sigma2 vTh = do
   eitherToSem $ fmap M.fromList $ traverse ecs $ zip groups offsets
 
 predictFromBetaUB
-  :: (Enum b, Bounded b, Ord b, Ord g, Show g, Show b, GLM.Effects r)
+  :: (GLM.PredictorC b, GLM.GroupC g, GLM.Effects r)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
   -> GLM.BetaU
@@ -171,10 +178,10 @@ predictFromBetaUB mm getPredictorM getLabelM rc ebg betaU vb = do
   fst <$> predict mm getPredictorM getLabelM fep epg rc
 
 predict
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  :: (GLM.PredictorC b, GLM.GroupC g, GLM.Effects r)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.FixedEffectParameters b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
@@ -222,7 +229,7 @@ predict mm getPredictorM getLabelM (GLM.FixedEffectParameters fe vFE) ebg rowCla
 
 -- predict by constructing vCoeffBeta and vCoeffb
 fixedEffectsCoefficientVector
-  :: (GLM.Effects r, Ord b, Bounded b, Enum b, Show b)
+  :: (GLM.Effects r, GLM.PredictorC b)
   => (b -> Maybe Double)
   -> GLM.FixedEffects b
   -> P.Sem r (VS.Vector Double)
@@ -231,7 +238,7 @@ fixedEffectsCoefficientVector getPredictorM fes = case fes of
   GLM.FixedEffects ies -> effectsCoefficientVector getPredictorM ies
 
 effectsCoefficientVector
-  :: (GLM.Effects r, Ord b, Bounded b, Enum b, Show b)
+  :: (GLM.Effects r, GLM.PredictorC b)
   => (b -> Maybe Double)
   -> GLM.IndexedEffectSet b
   -> P.Sem r (VS.Vector Double)
@@ -259,9 +266,9 @@ effectsCoefficientVector getPredictorM ies = eitherToSem $ do
 
 
 indexedGroupCoefficients
-  :: (GLM.Effects r, Ord b, Bounded b, Enum b, Show b, Ord g, Show g)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> P.Sem r [(Int, Double)]
@@ -308,7 +315,7 @@ indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
             P.throw
               $  GLM.OtherGLMError
               $  "Failed to find \""
-              <> label
+              <> (T.pack $ show label)
               <> "\" in group=\""
               <> (T.pack $ show g)
               <> "\". This is BAD."
@@ -324,10 +331,10 @@ indexedGroupCoefficients getPredictorM getLabelM ebg rc = do
   return indexedSparseVecEntries
 
 predict'
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> GLM.BetaU
@@ -396,10 +403,10 @@ conditionalCovariances mm cf reCalc vTh betaU = do
 
 
 predictWithCondVarCI
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> GLM.BetaU

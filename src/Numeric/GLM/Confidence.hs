@@ -74,10 +74,10 @@ data ConfidenceType = NaiveCondVarCI (LA.Matrix Double) GLM.ConditionalCovarianc
                     | BootstrapCI GLM.BootstrapCIType [(GLM.BetaU, VS.Vector Double)]
 
 predictWithCI
-  :: (Enum b, Bounded b, Ord b, Ord g, Show g, Show b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
-  -> (g -> Maybe T.Text)
+  -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
   -> GLM.BetaU

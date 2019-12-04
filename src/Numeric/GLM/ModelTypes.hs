@@ -117,7 +117,7 @@ data GroupFitSpec = GroupFitSpec { nCategories :: Int
                                  } deriving (Show, Eq)
 
 makeGroupFitSpec
-  :: (Ord b, Enum b, Bounded b, Effects r)
+  :: (GLM.PredictorC b, Effects r)
   => Int -- ^ number of items in group
   -> GLM.FixedEffects b
   -> GLM.IndexedEffectSet b
@@ -140,7 +140,7 @@ makeGroupFitSpec n fixedEffects indexedGroupEffects = do
 type FitSpecByGroup g = M.Map g GroupFitSpec --VB.Vector GroupFitSpec
 
 fitSpecByGroup
-  :: (Ord g, Show g, Ord b, Enum b, Bounded b, Show b, Effects r)
+  :: (GLM.PredictorC b, GLM.GroupC g, Effects r)
   => GLM.FixedEffects b
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g

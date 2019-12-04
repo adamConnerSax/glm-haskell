@@ -99,35 +99,30 @@ report mm smZ vBeta svb = do
     numberedGroups
 
 colPredictions
-  :: (Show b, Show g, Ord g)
+  :: (Show b, GLM.GroupC g)
   => GLM.EffectParametersByGroup g b
   -> (Double -> T.Text)
-  -> C.Colonnade C.Headed (T.Text, M.Map g T.Text, Double) T.Text
+  -> C.Colonnade
+       C.Headed
+       (T.Text, M.Map g (GLM.GroupKey g), Double)
+       T.Text
 colPredictions epgMap formatPrediction =
   let label (l, _, _) = l
       cats (_, c, _) = c
       pred (_, _, p) = p
-      gLabel g = maybe "--" id . M.lookup g
+      gLabel g = maybe "--" (T.pack . show) . M.lookup g
       makeGroupCol g = C.headed (T.pack $ show g) (gLabel g . cats)
   in  C.headed "Category" label
       <> mconcat (fmap makeGroupCol $ M.keys epgMap)
       <> C.headed "Prediction" (formatPrediction . pred)
 
 printPredictions
-  :: ( Traversable f
-     , Ord g
-     , Show g
-     , Show b
-     , Ord b
-     , Enum b
-     , Bounded b
-     , GLM.Effects r
-     )
+  :: (Traversable f, GLM.PredictorC b, GLM.GroupC g, GLM.Effects r)
   => GLM.MixedModel b g
   -> GLM.FixedEffectParameters b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
-  -> f (T.Text, M.Map b Double, M.Map g T.Text)
+  -> f (T.Text, M.Map b Double, M.Map g (GLM.GroupKey g))
   -> P.Sem r T.Text
 printPredictions mm fes epg rowClassifier labeledToPredict =
   let f predMap gLabelMap =
@@ -149,10 +144,10 @@ printPredictions mm fes epg rowClassifier labeledToPredict =
 -- fitted values of input data
 -- like "fitted" in lme4
 fitted
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.MixedModel b g
   -> (q -> b -> Double)
-  -> (q -> g -> T.Text)
+  -> (q -> g -> GLM.GroupKey g)
   -> GLM.FixedEffectParameters b
   -> GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
@@ -169,10 +164,10 @@ fitted mm getPred getLabel fep epg rowClassifier row =
 
 
 fitted'
-  :: (Ord g, Show g, Show b, Ord b, Enum b, Bounded b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.MixedModel b g
   -> (q -> b -> Double)
-  -> (q -> g -> T.Text)
+  -> (q -> g -> GLM.GroupKey g)
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
   -> GLM.BetaU
@@ -202,7 +197,7 @@ colFixedEffects =
       <> C.headed "Std. Dev" (T.pack . show . sqrt . var)
 
 printFixedEffects
-  :: (Show b, Enum b, Ord b, Bounded b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b)
   => GLM.FixedEffectStatistics b
   -> P.Sem r T.Text
 printFixedEffects (GLM.FixedEffectStatistics fep covars) = do
@@ -242,7 +237,7 @@ getIndexedE ies coeffF b = maybe (Left msg) Right (getIndexed ies coeffF b)
 
 -- Like "ranef" in lme4
 randomEffectsByLabel
-  :: (Ord g, Show g, Show b, Enum b, Bounded b, GLM.Effects r)
+  :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
   => GLM.EffectParametersByGroup g b
   -> GLM.RowClassifier g
   -> P.Sem
@@ -250,9 +245,12 @@ randomEffectsByLabel
        (M.Map g (GLM.IndexedEffectSet b, [(T.Text, LA.Vector Double)]))
 randomEffectsByLabel ebg rowClassifier = do
   let byLabel group (GLM.EffectParameters ies mEP) = do
-        indexedLabels <- M.toList <$> GLM.labelMap rowClassifier group
+        indexedKeys <- M.toList <$> GLM.labelMap rowClassifier group
         return
-          $ (ies, fmap (\(l, r) -> (l, LA.toRows mEP L.!! r)) indexedLabels)
+          $ ( ies
+            , fmap (\(gk, r) -> (T.pack (show gk), LA.toRows mEP L.!! r))
+                   indexedKeys
+            )
   GLM.eitherToSem $ M.traverseWithKey byLabel ebg
 
 

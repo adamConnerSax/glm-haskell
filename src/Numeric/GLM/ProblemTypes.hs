@@ -1,14 +1,20 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Numeric.GLM.ProblemTypes
-  ( WithIntercept(..)
+  ( PredictorC
+  , WithIntercept(..)
   , IndexedEffectSet
   , FixedEffects(..)
   , indexedFixedEffectSet
   , allFixedEffects
   , ItemInfo(..)
+  , GroupKey
+  , GroupC
   , RowClassifier(..)
   , groupIndices
   , groupSizes
@@ -34,11 +40,16 @@ import qualified Data.IndexedSet               as IS
 
 import qualified Control.Foldl                 as FL
 import qualified Data.Array                    as A
+import           Data.Kind                      ( Type )
 import qualified Data.List                     as L
 import qualified Data.Map                      as M
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Numeric.LinearAlgebra         as LA
+
+
+type PredictorC b = (Show b, Eq b, Ord b, Enum b, Bounded b)
+
 
 data WithIntercept b where
   Intercept :: WithIntercept b
@@ -129,6 +140,11 @@ indexedFixedEffectSet
 indexedFixedEffectSet InterceptOnly    = IS.fromList [Intercept]
 indexedFixedEffectSet (FixedEffects x) = x
 
+-- | All types used as groups must define an instance of this family
+type family GroupKey g :: Type
+
+type GroupC g = (Show g, Ord g, Show (GroupKey g), Ord (GroupKey g))
+
 type EffectsByGroup g b = M.Map g (IndexedEffectSet b)
 
 groupEffects
@@ -148,11 +164,12 @@ data ItemInfo = ItemInfo { itemIndex :: Int, itemName :: T.Text } deriving (Show
 g is the group and we need to map it to an Int, representing which group. E.g., "state" -> 0, "county" -> 1
 The IndexedSet has our map to and from Int, i.e., the position in the vectors
 The Vector of Vectors has our membership info where the vector for each row is indexed as in the indexed set
-Finally, the @Map g (Map Text Int)@ contains the info required to map
+Finally, the @Map g (Map (GroupKey g) Int)@ contains the info required to map
 a specific category in a group to its category index  
 -}
+
 data RowClassifier g where
-  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> M.Map g (M.Map T.Text Int) -> RowClassifier g
+  RowClassifier :: IS.IndexedSet g -> M.Map g Int -> VB.Vector (VB.Vector ItemInfo) -> M.Map g (M.Map (GroupKey g) Int) -> RowClassifier g
 
 -- get the row category for a given row and group
 categoryNumberFromRowIndex :: Ord g => RowClassifier g -> Int -> g -> Maybe Int
@@ -161,11 +178,16 @@ categoryNumberFromRowIndex (RowClassifier groupIndices _ rowClassifierV _) rowIn
     vectorIndex <- groupIndices `IS.index` group
     return $ itemIndex $ (rowClassifierV VB.! rowIndex) VB.! vectorIndex --rowIndex VB.! levelIndex  
 
-categoryNumberFromLabel :: Ord g => RowClassifier g -> T.Text -> g -> Maybe Int
+categoryNumberFromLabel
+  :: (Ord g, Ord (GroupKey g))
+  => RowClassifier g
+  -> GroupKey g
+  -> g
+  -> Maybe Int
 categoryNumberFromLabel (RowClassifier _ _ _ categoryIndexByGroup) label group
   = M.lookup group categoryIndexByGroup >>= M.lookup label
 
-instance Show g => Show (RowClassifier g) where
+instance (Show g, Show (GroupKey g)) => Show (RowClassifier g) where
   show (RowClassifier indices sizes infos labelMaps) = "RowClassifier " ++ show indices ++ " " ++ show sizes ++ " " ++ show infos ++ " " ++ show labelMaps
 
 groupSizes :: RowClassifier g -> M.Map g Int
@@ -180,15 +202,23 @@ groupIndices (RowClassifier groupIndices _ _ _) = groupIndices
 rowInfos :: RowClassifier g -> VB.Vector (VB.Vector ItemInfo)
 rowInfos (RowClassifier _ _ infos _) = infos
 
-labelMaps :: RowClassifier g -> M.Map g (M.Map T.Text Int)
+labelMaps
+  :: Ord (GroupKey g) => RowClassifier g -> M.Map g (M.Map (GroupKey g) Int)
 labelMaps (RowClassifier _ _ _ labelMaps) = labelMaps
 
 labelMap
-  :: (Show g, Ord g) => RowClassifier g -> g -> Either T.Text (M.Map T.Text Int)
+  :: (Show g, Ord g, Ord (GroupKey g), Show (GroupKey g))
+  => RowClassifier g
+  -> g
+  -> Either T.Text (M.Map (GroupKey g) Int)
 labelMap rc group = eitherLookup group $ labelMaps rc
 
 labelIndex
-  :: (Show g, Ord g) => RowClassifier g -> g -> T.Text -> Either T.Text Int
+  :: (Show g, Ord g, Ord (GroupKey g), Show (GroupKey g))
+  => RowClassifier g
+  -> g
+  -> GroupKey g
+  -> Either T.Text Int
 labelIndex rc group label = do
   labelMap <- eitherLookup group (labelMaps rc)
   eitherLookup label labelMap
