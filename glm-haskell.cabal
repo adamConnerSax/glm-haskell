@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: ab7aed8370b05bcdd226340ab3990b8ae20bc5d41a8059f15e3251affb92ac12
+-- hash: 01e6c7113f8036cee7bef6b257b5350b87d72861162d04af4818289ede9d3d3f
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -78,7 +78,6 @@ library
     , hmatrix-nlopt >=0.1.2 && <0.2
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
-    , log-domain <=0.12
     , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
@@ -87,7 +86,7 @@ library
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.0 && <0.3
+    , random-fu >=0.2.7.3 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -131,7 +130,6 @@ test-suite CHOLMOD-test
     , hmatrix-nlopt >=0.1.2 && <0.2
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
-    , log-domain <=0.12
     , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
@@ -140,7 +138,7 @@ test-suite CHOLMOD-test
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.0 && <0.3
+    , random-fu >=0.2.7.3 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -172,7 +170,6 @@ test-suite GLMM-test
     , hmatrix-nlopt >=0.1.2 && <0.2
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
-    , log-domain <=0.12
     , math-functions >=0.3.0 && <0.4
     , mtl
     , nonlinear-optimization >=0.3.11 && <0.4
@@ -183,7 +180,7 @@ test-suite GLMM-test
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.0 && <0.3
+    , random-fu >=0.2.7.3 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -216,7 +213,6 @@ test-suite LMM-test
     , hmatrix-nlopt >=0.1.2 && <0.2
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
-    , log-domain <=0.12
     , math-functions >=0.3.0 && <0.4
     , mtl
     , nonlinear-optimization >=0.3.11 && <0.4
@@ -227,7 +223,7 @@ test-suite LMM-test
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.0 && <0.3
+    , random-fu >=0.2.7.3 && <0.3
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3

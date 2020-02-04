@@ -30,7 +30,6 @@ dependencies:
 - hmatrix-nlopt >= 0.1.2 && < 0.2
 - kazura-queue >= 0.1.0 && < 0.2 
 - knit-haskell >= 0.7.0 && < 0.9
-- log-domain <= 0.12
 - math-functions >= 0.3.0 && < 0.4
 - nonlinear-optimization >= 0.3.11 && < 0.4
 - nonlinear-optimization-ad >= 0.2 && < 0.3
@@ -39,7 +38,7 @@ dependencies:
 - polysemy-plugin >= 0.2.2 && < 0.5
 - polysemy-RandomFu >= 0.4.0.0 && < 0.5
 - profunctors >= 5.3 && < 5.5
-- random-fu >= 0.2.7.0 && < 0.3
+- random-fu >= 0.2.7.3 && < 0.3
 - sparse-linear-algebra >= 0.3 && < 0.4
 - statistics >= 0.15.0 && < 0.16
 - text >= 1.1.0.1 && < 1.3

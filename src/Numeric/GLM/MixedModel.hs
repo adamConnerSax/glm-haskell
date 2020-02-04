@@ -483,7 +483,6 @@ cholmodAnalyzeProblem reCalc = do
 data ProfiledDevianceVerbosity = PDVNone | PDVSimple | PDVAll deriving (Show, Eq)
 data OptimizationStage = Optim_LMM | Optim_GLMM_PIRLS | Optim_GLMM_Final deriving (Show, Eq)
 
--- this one is IO since we'll need to unsafePerformIO it
 profiledDeviance
   :: GLM.EffectsIO r
   => ProfiledDevianceVerbosity
@@ -829,17 +828,6 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
           GLM.PCT_Deviance   -> return $ abs $ (pdCurrent - pd') / pd'
           GLM.PCT_Orthogonal -> P.throw
             $ GLM.OtherGLMError "ConvergeOrthognal not implemented yet."
-{-          
-        occ <- pirlsConvergence glmm
-                                smZS
-                                smP
-                                (lTheta chol)
-                                smU
-                                vEta
-                                vEta'
-                                svU'
-                                (bu_svU dBetaU)
--}
         case (cc < (GLM.pirlsTolerance pirlsCC), n) of
           (True, _) ->
             P.logLE P.Diagnostic "Finished." >> return (vEta', svU', chol)
@@ -936,7 +924,7 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
             --vBeta'     = vBeta + (GLM.bu_vBeta deltaBetaU)
             vEta'      = vEta + (LA.scale x vdEta)
         pdNew <- pdF vEta' svU'
-        return $ if pdNew <= (pd0 + tol) -- sometimes dBetaU is basically 0 because we are at a minimum.  So we need a little breathing room.
+        return $ if (pdNew - pd0) / pd0 <= tol -- sometimes dBetaU is basically 0 because we are at a minimum.  So we need a little breathing room.
           then Shrunk pdNew vEta' svU' deltaBetaU
           else NotShrunk
       check triesLeft x = do
