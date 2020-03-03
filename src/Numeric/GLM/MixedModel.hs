@@ -57,6 +57,8 @@ import           System.IO                      ( hSetBuffering
                                                 , BufferMode(..)
                                                 )
 
+import qualified Debug.Trace as Trace
+
 runEffectsVerboseIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsVerboseIO action =
   action
@@ -75,18 +77,19 @@ runEffectsIO action =
     & P.runFinal
 
 
-unsafePerformEffects :: GLM.GLMEffects a -> a -> a
-unsafePerformEffects action def =
-  action
-    & runEffectsIO
-    & fmap (either X.throwIO return)
-    & join
-    & (\x -> X.catch
-        x
-        (\(e :: X.SomeException) -> putStrLn ("Error: " ++ show e) >> return def
-        )
-      )
-    & unsafePerformIO
+unsafePerformEffects :: Bool -> GLM.GLMEffects a -> a -> a
+unsafePerformEffects verbose action def = 
+  let run = if verbose then runEffectsVerboseIO else runEffectsIO 
+  in (P.wrapPrefix "unsafePerformEffects" action)
+     & run
+     & fmap (either X.throwIO return)
+     & join
+     & (\x -> X.catch
+         x
+         (\(e :: X.SomeException) -> putStrLn ("Error: " ++ show e) >> return def
+         )
+       )
+     & unsafePerformIO
 
 lmmOptimizerToNLOPT
   :: GLM.LMMOptimizer
@@ -120,7 +123,7 @@ data ParameterEstimates =
 type FixedParameterEstimates = ParameterEstimates
 type GroupParameterEstimates = VB.Vector FixedParameterEstimates
 
-data MinimizeDevianceVerbosity = MDVNone | MDVSimple
+data MinimizeDevianceVerbosity = MDVNone | MDVSimple deriving (Eq, Ord)
 
 minimizeDeviance
   :: GLM.EffectsIO r
@@ -161,67 +164,6 @@ minimizeDeviance verbosity dt mm reCalc th0 =
       vEta  = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
       vMu = LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType mm)) vEta
     return (res, vMu, cholmodAnalysis)
-{-    
-    let
-      pdv = case verbosity of
-        MDVNone   -> PDVNone
-        MDVSimple -> PDVSimple
-      (objectiveOs, finalOs) = if GLM.generalized mm
-        then (Optim_GLMM_PIRLS, Optim_GLMM_Final)
-        else (Optim_LMM, Optim_LMM)
-      pd
-        :: GLM.EffectsIO r
-        => OptimizationStage
-        -> GLM.CovarianceVec
-        -> P.Sem
-             r
-             ( Double
-             , Double
-             , GLM.BetaU
-             , SLA.SpVector Double
-             , CholeskySolutions
-             )
-      pd os x = profiledDeviance pdv cholmodAnalysis dt mm reCalc os x
-      obj x = unsafePerformEffects
-        (fmap (\(d, _, _, _, _) -> d) $ pd objectiveOs x)
-        0
-      levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
-      thetaLB   = thetaLowerBounds levels
-      algorithm = (lmmOptimizerToNLOPT $ GLM.lmmOptimizer $ GLM.lmmControls mm)
-        obj
-        [thetaLB]
-        Nothing
-      stop =
-        NL.ObjectiveAbsoluteTolerance
-            (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)
-          NL.:| []
-      problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
-      expThetaLength = FL.fold
-        (FL.premap
-          (\l -> let e = effectsForGroup l in e + (e * (e - 1) `div` 2))
-          FL.sum
-        )
-        levels
-    when (LA.size th0 /= expThetaLength)
-      $  P.throw
-      $  GLM.OtherGLMError
-      $  "guess for theta has "
-      <> (T.pack $ show $ LA.size th0)
-      <> " entries but should have "
-      <> (T.pack $ show expThetaLength)
-      <> "."
-    let eSol = NL.minimizeLocal problem th0
-    case eSol of
-      Left result -> P.throw (GLM.OtherGLMError $ T.pack $ show result)
-      Right (NL.Solution pdS thS result) -> do
-        P.logLE P.Info
-          $  "Solution ("
-          <> (T.pack $ show result)
-          <> ") reached! At th="
-          <> (T.pack $ show thS)
-        (pdVal, sigma2, betaU, svb, cs) <- pd finalOs thS
-        return (thS, pdVal, sigma2, betaU, SD.toDenseVector svb, cs)
--}
 
 minimizeDevianceInner
   :: GLM.EffectsIO r
@@ -263,6 +205,7 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
              )
       pd os x = profiledDeviance pdv cf dt mm reCalc os x
       obj x = unsafePerformEffects
+        (verbosity >= MDVSimple)
         (fmap (\(d, _, _, _, _) -> d) $ pd objectiveOs x)
         0
       levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
@@ -812,6 +755,8 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
           <> (T.pack $ show n)
           <> "; pd="
           <> (T.pack $ show pdCurrent)
+          <> "; vEta="
+          <> (T.pack $ show vEta) 
           <> ")"
         (pd', vEta', svU', dBetaU, chol, smU) <- updateEtaBetaU
           cf
@@ -1086,7 +1031,10 @@ betaFrom
 betaFrom mX zStar svU vEta =
   let vZSu = SD.toDenseVector $ (GLM.smZS zStar) SLA.#> svU
       vRhs = LA.tr mX LA.#> (vEta - vZSu)
-      cXtX = LA.chol $ LA.trustSym $ LA.tr mX LA.<> mX
+      xTx = LA.tr mX LA.<> mX
+--      xTx' = Trace.traceShow ("xTx=" ++ show xTx) xTx
+      cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
+--      cXtX' = Trace.traceShow ("cXtX=" ++ show cXtX) cXtX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
 
 cholmodCholeskySolutions'
@@ -1110,13 +1058,13 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
     let cfs = CH.FactorizeAtAPlusBetaI 1
     liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt
     (svRhsZ, vRhsX) <- normalEquationsRHS nes smUt (LA.tr mV) vY
-  {-  P.logLE P.Diagnostic
-      $  "Normal Equation RHS:\nsmPRhsZ="
-      <> (T.pack $ show smPRhsZ)
+    P.logLE P.Diagnostic
+      $  "Normal Equation RHS:\nsvRhsZ="
+      <> (T.pack $ show svRhsZ)
       <> "\nvRhsX="
       <> (T.pack $ show vRhsX)
-    P.logLE P.Diagnostic "Calling solveSparse for svC."
--}
+--    P.logLE P.Diagnostic "Calling solveSparse for svC."
+
     smPRhsZ         <- liftIO
       $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svRhsZ)
 --    P.logLE P.Diagnostic "After smPRhsZ..."
@@ -1132,9 +1080,13 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
     -- NB: c is defined as Lu + Rzx(Beta) which allows solving the normal equations in pieces
     let vTvMinusRzxTRzx =
           (LA.tr mV) LA.<> mV - (SD.toDenseMatrix $ smRzx SLA.#^# smRzx)
-        mRxx            = LA.chol $ LA.trustSym $ vTvMinusRzxTRzx
+--    liftIO $ putStrLn $ "mV=" ++ show mV
+--    liftIO $ putStrLn $ "Rzx=" ++ show smRzx
+--    liftIO $ putStrLn $ "vtVMinusRzxTRzx=" ++ (show vTvMinusRzxTRzx)
+    let mRxx            = LA.chol $ LA.trustSym $ vTvMinusRzxTRzx
+
     -- now we have the entire Cholesky decomposition.  Solve the normal equations
-        vRzxtC          = SD.toDenseVector $ (SLA.transposeSM smRzx) SLA.#> svC
+    let vRzxtC          = SD.toDenseVector $ (SLA.transposeSM smRzx) SLA.#> svC
         betaSols        = LA.cholSolve mRxx (LA.asColumn $ vRhsX - vRzxtC)
         vBeta           = head $ LA.toColumns $ betaSols
         svBeta          = SD.toSparseVector vBeta

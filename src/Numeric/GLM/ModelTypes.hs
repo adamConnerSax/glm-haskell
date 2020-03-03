@@ -124,7 +124,9 @@ makeGroupFitSpec
   -> P.Sem r GroupFitSpec
 makeGroupFitSpec n fixedEffects indexedGroupEffects = do
   let indexedFixedEffects = GLM.indexedFixedEffectSet fixedEffects
-  when (not $ IS.subset indexedGroupEffects indexedFixedEffects)
+  -- even if we don't have an intercept in the fixed effects, we can have
+  -- group intercepts. I think.
+  when (not $ IS.subset indexedGroupEffects (IS.add indexedFixedEffects GLM.Intercept))
     $ P.throw
     $ OtherGLMError
         "group contains effects not in fixed effects in \"makeGroupFitSpec\""
