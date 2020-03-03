@@ -215,9 +215,9 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
         [thetaLB]
         Nothing
       stop =
-        NL.ObjectiveAbsoluteTolerance
-            (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)
-          NL.:| []
+        NL.ObjectiveRelativeTolerance
+        (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)
+        NL.:|  [NL.ObjectiveAbsoluteTolerance (GLM.lmmOptimizerTolerance $ GLM.lmmControls mm)]
       problem = NL.LocalProblem (fromIntegral $ LA.size th0) stop algorithm
       eSol    = NL.minimizeLocal problem th0
     case eSol of
@@ -445,7 +445,7 @@ profiledDeviance
        ) -- ^ (pd, sigma^2, beta, u, b) 
 profiledDeviance verbosity cf dt mm reCalc os vTh =
   P.wrapPrefix "profiledDeviance" $ do
-    P.logLE P.Diagnostic $ "here"
+--    P.logLE P.Diagnostic $ "here"
     liftIO $ hSetBuffering stdout NoBuffering
     let mX     = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         smZ    = GLM.recModelMatrix reCalc
@@ -755,8 +755,8 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
           <> (T.pack $ show n)
           <> "; pd="
           <> (T.pack $ show pdCurrent)
-          <> "; vEta="
-          <> (T.pack $ show vEta) 
+--          <> "; vEta="
+--          <> (T.pack $ show vEta) 
           <> ")"
         (pd', vEta', svU', dBetaU, chol, smU) <- updateEtaBetaU
           cf
@@ -775,7 +775,7 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
             $ GLM.OtherGLMError "ConvergeOrthognal not implemented yet."
         case (cc < (GLM.pirlsTolerance pirlsCC), n) of
           (True, _) ->
-            P.logLE P.Diagnostic "Finished." >> return (vEta', svU', chol)
+            P.logLE P.Diagnostic "Converged." >> return (vEta', svU', chol)
           (False, 1) -> P.throw
             (GLM.OtherGLMError "Too many iterations in getCholeskySolutions.")
           (False, m) -> do
@@ -1058,11 +1058,13 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
     let cfs = CH.FactorizeAtAPlusBetaI 1
     liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt
     (svRhsZ, vRhsX) <- normalEquationsRHS nes smUt (LA.tr mV) vY
+{-    
     P.logLE P.Diagnostic
       $  "Normal Equation RHS:\nsvRhsZ="
       <> (T.pack $ show svRhsZ)
       <> "\nvRhsX="
       <> (T.pack $ show vRhsX)
+-}
 --    P.logLE P.Diagnostic "Calling solveSparse for svC."
 
     smPRhsZ         <- liftIO
