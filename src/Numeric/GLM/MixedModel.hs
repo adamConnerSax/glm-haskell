@@ -36,9 +36,9 @@ import qualified Data.List                     as L
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
-import           Data.Typeable                  ( Typeable )
+--import           Data.Typeable                  ( Typeable )
 
-import           Numeric.LinearAlgebra.Sparse   ( (#>) )
+--import           Numeric.LinearAlgebra.Sparse   ( (#>) )
 
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Numeric.NLOPT                 as NL
@@ -47,7 +47,7 @@ import           System.IO.Unsafe               ( unsafePerformIO )
 
 
 import qualified Data.Map                      as M
-import           Data.Maybe                     ( isJust )
+--import           Data.Maybe                     ( isJust )
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
@@ -57,7 +57,7 @@ import           System.IO                      ( hSetBuffering
                                                 , BufferMode(..)
                                                 )
 
-import qualified Debug.Trace as Trace
+--import qualified Debug.Trace as Trace
 
 runEffectsVerboseIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsVerboseIO action =

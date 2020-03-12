@@ -10,8 +10,8 @@ module Numeric.GLM.FunctionFamily where
 
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Data.Vector.Storable          as VS
-import qualified Numeric.MathFunctions.Constants
-                                               as MC
+--import qualified Numeric.MathFunctions.Constants
+--                                               as MC
 
 import qualified Statistics.Distribution       as S
 import qualified Statistics.Distribution.Binomial

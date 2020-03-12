@@ -11,20 +11,17 @@ import qualified Data.IndexedSet               as IS
 import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.MixedModel        as GLM
-import qualified Numeric.GLM.FunctionFamily    as GLM
 import qualified Numeric.GLM.Predict           as GLM
 import qualified Numeric.SparseDenseConversions
                                                as SD
 
 import qualified Polysemy                      as P
-import qualified Polysemy.Error                as P
 import qualified Control.Foldl                 as FL
 import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 
 import qualified Data.Map                      as M
-import           Data.Maybe                     ( catMaybes )
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.List                     as L
@@ -37,7 +34,6 @@ import qualified Numeric.LinearAlgebra         as LA
 
 import qualified Data.Text                     as T
 import qualified Data.Vector.Storable          as VS
-import qualified Data.Vector.Split             as VS
 
 
 {-

@@ -40,10 +40,10 @@ where
 
 import qualified Data.IndexedSet               as IS
 
-import qualified Control.Foldl                 as FL
+--import qualified Control.Foldl                 as FL
 import qualified Data.Array                    as A
 import           Data.Kind                      ( Type )
-import qualified Data.List                     as L
+--import qualified Data.List                     as L
 import qualified Data.Map                      as M
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB

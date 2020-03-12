@@ -14,7 +14,6 @@ module Numeric.GLM.Bootstrap
   )
 where
 
-import qualified Numeric.LinearAlgebra         as LA
 import qualified Data.List                     as L
 import           Data.Maybe                     ( catMaybes )
 import qualified Data.Text                     as T
@@ -27,7 +26,6 @@ import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 import qualified Control.Concurrent.KazuraQueue
                                                as KQ
-import           GHC.Conc                       ( getNumCapabilities )
 
 
 import qualified Numeric.GLM.FunctionFamily    as GLM
@@ -35,8 +33,7 @@ import qualified Numeric.GLM.ModelTypes        as GLM
 import qualified Numeric.GLM.ProblemTypes      as GLM
 import qualified Numeric.GLM.MixedModel        as GLM
 import qualified Numeric.GLM.Predict           as GLM
-import qualified Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
-                                               as CH
+
 
 import qualified Statistics.Types              as S
 import           Statistics.Types               ( mkCL )
@@ -45,7 +42,6 @@ import qualified Statistics.Distribution.StudentT
                                                as S
 import qualified Statistics.Distribution.Normal
                                                as S
-import qualified Numeric.SpecFunctions         as SF
 
 import qualified Data.Random                   as DR
 import qualified Data.Random.Distribution.Normal
@@ -56,11 +52,8 @@ import qualified Data.Random.Distribution.Binomial
                                                as DR
 import qualified Data.Random.Distribution.Poisson
                                                as DR
-import qualified Data.Random.Distribution.Gamma
-                                               as DR
 
 import qualified Knit.Effect.Logger            as P
-import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 import qualified Polysemy.RandomFu             as P
 import           Polysemy.RandomFu              ( RandomFu
@@ -75,7 +68,7 @@ import           Polysemy.Async                 ( Async
 --                                               as P
 
 import           Control.Concurrent            as CC
-import           Control.Concurrent.MVar       as CC
+--import           Control.Concurrent.MVar       as CC
 
 -- TODO: handle the sometimes requiring dev parameter in a cleaner way.
 generateSample

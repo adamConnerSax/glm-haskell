@@ -4,12 +4,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Numeric.SparseDenseConversions where
 
-import qualified Control.Foldl                 as FL
+--import qualified Control.Foldl                 as FL
 
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Numeric.LinearAlgebra.Class   as SLA
-import qualified Numeric.LinearAlgebra.Sparse  as SLA
+--import qualified Numeric.LinearAlgebra.Sparse  as SLA
 
 import qualified Numeric.LinearAlgebra         as LA
 

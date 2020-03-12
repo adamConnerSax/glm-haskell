@@ -32,7 +32,7 @@ import qualified Data.List.Extra               as LE
 import qualified Data.IntMap                   as IM
 import qualified Data.Map                      as M
 import qualified Data.Set                      as S
-import qualified Data.Text                     as T
+--import qualified Data.Text                     as T
 
 
 -- don't export this constructor !!

@@ -44,8 +44,8 @@ where
 import Foreign hiding (free)
 import Foreign.C.Types
 import Foreign.C.String
-import Foreign.Storable (peek)
-import Foreign.Marshal.Alloc (alloca)
+--import Foreign.Storable (peek)
+--import Foreign.Marshal.Alloc (alloca)
 import System.IO.Unsafe (unsafePerformIO)
 
 

@@ -1,5 +1,35 @@
 packages: .
 
+-- ghc 8.8 forks
+allow-newer: base, hashable
+   
+source-repository-package
+  type: git
+  location: https://github.com/adamConnerSax/random-fu
+  tag: 81e67b5596c173720032f7fa83610c4e4138b839
+  subdir: random-fu
+
+source-repository-package
+  type: git
+  location: https://github.com/adamConnerSax/random-fu
+  tag: 81e67b5596c173720032f7fa83610c4e4138b839
+  subdir: random-source
+
+source-repository-package
+  type: git
+  location: https://github.com/adamConnerSax/random-fu
+  tag: 81e67b5596c173720032f7fa83610c4e4138b839
+  subdir: rvar
+    
+--- ghc-8.8 forks ends
+
+--
+
+source-repository-package
+  type: git
+  location: https://github.com/adamConnerSax/knit-haskell
+  tag: eb747db16ad3616e23d58becdf0c04223ff3bef4        
+          
 source-repository-package
   type: git
   location: https://github.com/adamConnerSax/hcholmod

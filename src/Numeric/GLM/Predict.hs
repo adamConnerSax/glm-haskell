@@ -22,7 +22,7 @@ import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 import qualified Knit.Effect.Logger            as P
 import qualified Control.Foldl                 as FL
-import           Control.Monad                  ( when )
+--import           Control.Monad                  ( when )
 import           Control.Monad.IO.Class         ( MonadIO(liftIO) )
 
 
@@ -31,7 +31,7 @@ import           Data.Maybe                     ( catMaybes )
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.List                     as L
-import qualified Colonnade                     as C
+--import qualified Colonnade                     as C
 
 import qualified Numeric.LinearAlgebra.Class   as SLA
 
