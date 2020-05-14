@@ -1,4 +1,4 @@
-packages: .
+packages: . ../knit-haskell
 
 -- ghc 8.8 forks
 allow-newer: base, hashable
@@ -25,10 +25,10 @@ source-repository-package
 
 --
 
-source-repository-package
-  type: git
-  location: https://github.com/adamConnerSax/knit-haskell
-  tag: eb747db16ad3616e23d58becdf0c04223ff3bef4        
+--source-repository-package
+--  type: git
+--  location: https://github.com/adamConnerSax/knit-haskell
+--  tag: eb747db16ad3616e23d58becdf0c04223ff3bef4        
           
 source-repository-package
   type: git

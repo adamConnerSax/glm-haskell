@@ -88,6 +88,7 @@ import qualified Control.Exception             as X
 import           Data.Typeable                  ( Typeable )
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
+import qualified Polysemy.Reader                as P
 import qualified Knit.Effect.Logger            as P
 
 
@@ -99,7 +100,7 @@ type EffectsIO r = ( Effects r
                    , P.Member (P.Embed IO) r)
 
 
-type GLMEffects a = P.Sem '[P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
+type GLMEffects a = P.Sem '[P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
 
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double
