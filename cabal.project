@@ -1,4 +1,4 @@
-packages: . ../knit-haskell
+packages: . 
 
 -- ghc 8.8 forks
 allow-newer: base, hashable
@@ -34,3 +34,9 @@ source-repository-package
   type: git
   location: https://github.com/adamConnerSax/hcholmod
   tag: 176736ca6cb8af78996a061df09821b78677c519
+
+
+source-repository-package
+  type: git
+  location: https://github.com/adamConnerSax/knit-haskell
+  tag: 4aceaa838846e106c1d17f4845588bffb6144355    

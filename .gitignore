@@ -19,3 +19,4 @@ examples/html
 *.aux
 *.png
 *_flymake.hs
+*.tmp

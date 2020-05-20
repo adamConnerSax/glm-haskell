@@ -832,7 +832,7 @@ updateEtaBetaU cf mm maxHalvings zStar pdFunction vEta svU =
       <> ")." --- (Eta=" <> (T.pack $ show vEta') <> ")"
     return (pdFinal, vEta', svU', dBetaU', chol, smU)
 
-data ShrinkPD = Shrunk Double GLM.EtaVec GLM.UVec GLM.BetaU | NotShrunk deriving (Show)
+data ShrinkPD = Shrunk Double GLM.EtaVec GLM.UVec GLM.BetaU | NotShrunk Double deriving (Show)
 
 refine_dBetaU
   :: GLM.EffectsIO r
@@ -871,8 +871,8 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
         pdNew <- pdF vEta' svU'
         return $ if (pdNew - pd0) / pd0 <= tol -- sometimes dBetaU is basically 0 because we are at a minimum.  So we need a little breathing room.
           then Shrunk pdNew vEta' svU' deltaBetaU
-          else NotShrunk
-      check triesLeft x = do
+          else NotShrunk pdNew
+      check triesLeft x xs = do
         P.logLE P.Diagnostic
           $  "check (triesLeft="
           <> (T.pack $ show triesLeft)
@@ -881,20 +881,27 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
           <> ")..."
         co <- checkOne x
         case co of
-          NotShrunk -> if triesLeft > 1
-            then
-              (do
-                check (triesLeft - 1) (x / 2)
-              )
-            else
-              P.throw
-              $  GLM.OtherGLMError
-              $  "Too many step-halvings in getCholeskySolutions. (dBetaU = "
-              <> (T.pack $ show dBetaU)
+          NotShrunk pd -> if triesLeft > 1
+                          then check (triesLeft - 1) (x / 2) (pd : xs)
+                          else (do
+                                   let dBetaNorm2 = LA.norm_2 $ GLM.bu_vBeta dBetaU
+                                       dUNorm2 = SLA.norm2 $ GLM.bu_svU dBetaU
+                                   P.throw
+                                     $  GLM.OtherGLMError
+                                     $  ("Too many step-halvings in getCholeskySolutions: Norm2(dBeta) = "
+                                         <> (T.pack $ show dBetaNorm2)
+                                         <> "; Norm2(dU) = "
+                                         <> (T.pack $ show dUNorm2)
+                                         <> "; pd0="
+                                         <> (T.pack $ show pd0)
+                                         <> "; pdPath="
+                                         <> (T.pack $ show $ reverse (pd : xs))                                         
+                                        )
+                               )
           sh@(Shrunk pdFinal vEtaFinal svUFinal deltaBetaU) -> do
 --            P.logLE P.Diagnostic $ "refined: " <> (T.pack $ show sh)
             return (pdFinal, vEtaFinal, svUFinal, deltaBetaU)
-    check maxHalvings 1.0
+    check maxHalvings 1.0 []
 
 
 -- glmer: updateXwts but also with lambda
@@ -1081,7 +1088,7 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
     -- compute Rxx
     -- NB: c is defined as Lu + Rzx(Beta) which allows solving the normal equations in pieces
     let vTvMinusRzxTRzx =
-          (LA.tr mV) LA.<> mV - (SD.toDenseMatrix $ smRzx SLA.#^# smRzx)
+          ((LA.tr mV) LA.<> mV)  - (SD.toDenseMatrix $ smRzx SLA.#^# smRzx)
 --    liftIO $ putStrLn $ "mV=" ++ show mV
 --    liftIO $ putStrLn $ "Rzx=" ++ show smRzx
 --    liftIO $ putStrLn $ "vtVMinusRzxTRzx=" ++ (show vTvMinusRzxTRzx)
