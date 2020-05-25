@@ -40,6 +40,11 @@ data LinkFunction = LinkFunction { link :: Double -> Double -- map from observat
                                  , derivInv :: Double -> Double -- useful in PIRLS algo
                                  }
 
+
+-- One property of the canonical link (does this define it?), is that
+-- it has the property that d(eta)/dmu * (1/var (eta)) = 1
+-- this quantity comes up in the PIRLS algo so, whent he link is canonical
+-- we simplify.
 canonicalLink :: ObservationsDistribution -> LinkFunctionType
 canonicalLink Normal       = IdentityLink
 canonicalLink (Binomial _) = LogisticLink
@@ -50,10 +55,10 @@ canonicalLink Gamma        = ReciprocalLink
 linkFunction :: LinkFunctionType -> LinkFunction
 linkFunction IdentityLink = LinkFunction id id (const 1)
 linkFunction LogisticLink = LinkFunction
-  (\x -> log (x / (1 - x)))
-  (\x -> let y = exp (-x) in 1 / (1 + y))
-  (\x ->
-    let y = exp (-x)
+  (\mu -> log (mu / (1 - mu)))
+  (\eta -> let y = exp (-eta) in 1 / (1 + y))
+  (\eta ->
+    let y = exp (-eta)
         z = 1 + y
     in  y / (z * z)
   )
@@ -62,8 +67,6 @@ linkFunction ReciprocalLink =
   LinkFunction (\x -> -1 / x) (\x -> -1 / x) (\x -> 1 / (x * x))
 
 data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
-
-
 -- notation here:
 -- y are the observations
 -- mu is the conditional mean of the linear predictor after mapping via the link function
@@ -245,6 +248,22 @@ scaledVariance Normal    vMu = VS.map (scaledVarianceOne DNormal) vMu
 scaledVariance Bernoulli vMu = VS.map (scaledVarianceOne DBernoulli) vMu
 scaledVariance Poisson   vMu = VS.map (scaledVarianceOne DPoisson) vMu
 scaledVariance Gamma     vMu = VS.map (scaledVarianceOne DGamma) vMu
+
+
+canonicaldEtadMuOverVarOne :: ObservationDistribution -> Double -> Double
+canonicaldEtadMuOverVarOne DNormal _ = 0
+canonicaldEtadMuOverVarOne DBernoulli eta = let y = exp(-eta) in sqrt (y) / (1+y)
+canonicaldEtadMuOverVarOne (DBinomial n) eta = let y = exp(-eta) in sqrt (realToFrac n * y) / (1+y)
+canonicaldEtadMuOverVarOne DPoisson eta = exp (eta / 2)
+canonicaldEtadMuOverVarOne DGamma eta = 1 / eta
+
+canonicaldEtadMuOverVar :: ObservationsDistribution -> LA.Vector Double -> LA.Vector Double
+canonicaldEtadMuOverVar Normal vEta = VS.map (canonicaldEtadMuOverVarOne DNormal) vEta
+canonicaldEtadMuOverVar Bernoulli vEta = VS.map (canonicaldEtadMuOverVarOne DBernoulli) vEta
+canonicaldEtadMuOverVar (Binomial vN) vEta = VS.zipWith (\n eta -> canonicaldEtadMuOverVarOne (DBinomial n) eta) vN vEta
+canonicaldEtadMuOverVar Poisson vEta = VS.map (canonicaldEtadMuOverVarOne DPoisson) vEta
+canonicaldEtadMuOverVar Gamma vEta = VS.map (canonicaldEtadMuOverVarOne DGamma) vEta
+
 
 
 -- Numeric helpers 

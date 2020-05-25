@@ -10,6 +10,8 @@ module Numeric.GLM.ModelTypes
   ( GLMError(..)
   , Effects
   , EffectsIO
+--  , EffectsWithLoggedError
+--  , EffectsWithLoggedErrorIO
   , GLMEffects
   , FixedPredictors
   , Observations
@@ -59,6 +61,7 @@ module Numeric.GLM.ModelTypes
   , BetaU(..)
   , scaleBetaU
   , addBetaU
+  , diffBetaU
   , makeZS
   , ZStarMatrix(smZS)
   , RandomEffectCalculated(..)
@@ -80,6 +83,7 @@ import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 import qualified Numeric.LinearAlgebra         as LA
+import qualified Numeric.NLOPT                 as NL
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
@@ -89,18 +93,22 @@ import           Data.Typeable                  ( Typeable )
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 import qualified Polysemy.Reader                as P
+import qualified Polysemy.State                as P
 import qualified Knit.Effect.Logger            as P
 
 
 data GLMError = OtherGLMError T.Text | NonGLMError T.Text deriving (Show, Typeable)
 instance X.Exception GLMError
 
-type Effects r = (P.Member (P.Error GLMError) r, P.LogWithPrefixesLE r)
+type Effects r = (P.Member (P.Error GLMError) r, P.Member (P.State [T.Text]) r, P.LogWithPrefixesLE r)
 type EffectsIO r = ( Effects r
                    , P.Member (P.Embed IO) r)
 
+--type EffectsWithLoggedError r = (Effects r, P.Member (P.State [T.Text]) r)
+--type EffectsWithLoggedErrorIO r = (EffectsWithLoggedError r, P.Member (P.Embed IO) r)
 
-type GLMEffects a = P.Sem '[P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
+
+type GLMEffects a = P.Sem '[P.State [T.Text], P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
 
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double
@@ -183,15 +191,15 @@ changeMMSObservations
 changeMMSObservations os (MixedModelSpec rms fsbg) =
   MixedModelSpec (changeRMSObservations os rms) fsbg
 
-data LMMOptimizer = LMM_BOBYQA | LMM_NELDERMEAD | LMM_SBPLX | LMM_NEWUOA_BOUND deriving (Show, Eq)
-
+data LMMOptimizer = LMM_BOBYQA | LMM_NELDERMEAD | LMM_SBPLX | LMM_NEWUOA_BOUND | LMM_COBYLA deriving (Show, Eq)
 
 data LMMControls = LMMControls { lmmOptimizer :: LMMOptimizer
                                , lmmOptimizerTolerance :: Double
+                               , lmmOptimizerInitialStep :: Maybe CovarianceVec
                                } deriving (Show, Eq)
 
 defaultLMMControls :: LMMControls
-defaultLMMControls = LMMControls LMM_BOBYQA 1e-6
+defaultLMMControls = LMMControls LMM_BOBYQA 1e-6 Nothing
 
 data PIRLSConvergenceType = PCT_Eta | PCT_Deviance | PCT_Orthogonal deriving (Show, Eq)
 
@@ -224,7 +232,7 @@ data GeneralizedLinearMixedModelSpec b g =
   GeneralizedLinearMixedModelSpec { glmmsLinearMixedModelSpec :: LinearMixedModelSpec b g
                                   , glmmsWeights :: WMatrix -- this should prolly be in LinearMixedModelSpec
                                   , glmmsObservationsDistribution :: GLM.ObservationsDistribution
-                                  , glmmsControls :: GLMMControls
+                                   , glmmsControls :: GLMMControls
                                   } deriving (Show)
 
 

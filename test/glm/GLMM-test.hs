@@ -17,6 +17,7 @@ import qualified Numeric.GLM.Predict           as GLM
 import qualified Numeric.GLM.Confidence        as GLM
 import qualified Numeric.GLM.Report            as GLM
 
+
 import qualified Numeric.SparseDenseConversions
                                                as SD
 import           DataFrames
@@ -64,7 +65,7 @@ throwMaybe msg x = throwEither $ maybe (Left $ GLM.OtherGLMError $ msg) Right x
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
-  let lmmControls = GLM.LMMControls GLM.LMM_BOBYQA 1e-6 --defaultLMMControls
+  let lmmControls = GLM.LMMControls GLM.LMM_BOBYQA 1e-6 Nothing --defaultLMMControls
 
   let glmmControls = GLM.GLMMControls
         GLM.UseCanonical
@@ -113,9 +114,12 @@ main = do
         [ (OG_Block       , IS.fromList [GLM.Intercept])
         , (OG_VarietyBlock, IS.fromList [GLM.Intercept])
         ]
-      asLMM x = LMM x lmmControls
+--      asLMM x = LMM x lmmControls
       vW = LA.fromList $ L.replicate (FL.fold FL.length frame) 1.0
-      asGLMM x = GLMM x vW GLM.Normal glmmControls
+      
+      asGLMM x = GLM.GeneralizedLinearMixedModel
+        (GLM.GeneralizedLinearMixedModelSpec x vW GLM.Normal glmmControls)
+--      asGLMM x = GLMM x vW GLM.Normal glmmControls
 -}
 
   frame <- defaultLoadToFrame @'[Row, Herd, Incidence, Size, Period, Obs]
