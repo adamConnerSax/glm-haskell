@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f4492453a8f5befe77147e58b8a55718889662d7b71f007a8aa73f52e07a871f
+-- hash: bdf154ca3dd65ff986d448b7787e1b7dd330a7c92143d836612a7cb252dc102b
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -88,6 +88,7 @@ library
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
+    , say >=0.1.0.1 && <0.2
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -141,6 +142,7 @@ test-suite CHOLMOD-test
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
+    , say >=0.1.0.1 && <0.2
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -184,6 +186,7 @@ test-suite GLMM-test
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
+    , say >=0.1.0.1 && <0.2
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3
@@ -228,6 +231,7 @@ test-suite LMM-test
     , polysemy-zoo >=0.3.0 && <0.8
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
+    , say >=0.1.0.1 && <0.2
     , sparse-linear-algebra >=0.3 && <0.4
     , statistics >=0.15.0 && <0.16
     , text >=1.1.0.1 && <1.3

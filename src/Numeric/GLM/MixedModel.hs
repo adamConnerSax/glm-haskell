@@ -54,6 +54,8 @@ import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 
+import qualified Say 
+
 import           System.IO                      ( hSetBuffering
                                                 , stdout
                                                 , hFlush
@@ -64,7 +66,7 @@ import           System.IO                      ( hSetBuffering
 
 runEffectsVerboseIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsVerboseIO action =
-  action
+  (P.catch action glmExceptionLogger)
   & runLogOnGLMException
   & P.filteredLogEntriesToIO P.logAll
   & P.errorToIOFinal
@@ -74,7 +76,7 @@ runEffectsVerboseIO action =
 
 runEffectsIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsIO action =
-  action
+  (P.catch action glmExceptionLogger)
   & runLogOnGLMException
   & P.filteredLogEntriesToIO P.nonDiagnostic
   & P.errorToIOFinal
@@ -91,7 +93,7 @@ unsafePerformEffects verbose action def =
      & join
      & (\x -> X.catch
          x
-         (\(e :: X.SomeException) -> putStrLn ("Error: " ++ show e) >> return def
+         (\(e :: X.SomeException) -> Say.say ("Error (during unsafePerformEffects in objective): " <> (T.pack $ show e)) >> return def
          )
        )
      & unsafePerformIO
@@ -103,8 +105,18 @@ logOnGLMException t = P.modify (\msgs -> t : msgs)
 runLogOnGLMException :: P.Sem (P.State [T.Text] ': r) a -> P.Sem r a
 runLogOnGLMException = fmap snd . P.runState []
 
+glmExceptionLogToText :: [T.Text] -> T.Text
+glmExceptionLogToText =  T.intercalate "\n" . reverse
+
 getGLMExceptionLog :: P.Member (P.State [T.Text]) r => P.Sem r T.Text
-getGLMExceptionLog = T.intercalate "\n" . reverse <$> P.get 
+getGLMExceptionLog = glmExceptionLogToText <$> P.get
+
+glmExceptionLogger :: GLM.Effects r => GLM.GLMError -> P.Sem r a
+glmExceptionLogger e = do
+   l <- getGLMExceptionLog
+   P.logLE P.Info $ "GLM Error: " <> (T.pack $ show e)
+   P.logLE P.Diagnostic $ "Exception Log:\n" <> l
+   P.throw e
 
 lmmOptimizerToNLOPT
   :: GLM.LMMOptimizer

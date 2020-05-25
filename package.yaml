@@ -40,6 +40,7 @@ dependencies:
 - polysemy-RandomFu >= 0.4.0.0 && < 0.5
 - profunctors >= 5.3 && < 5.5
 - random-fu >= 0.2.7.3 && < 0.3
+- say >= 0.1.0.1 && < 0.2
 - sparse-linear-algebra >= 0.3 && < 0.4
 - statistics >= 0.15.0 && < 0.16
 - text >= 1.1.0.1 && < 1.3
