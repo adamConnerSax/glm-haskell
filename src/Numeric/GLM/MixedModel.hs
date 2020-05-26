@@ -175,8 +175,7 @@ minimizeDeviance
 minimizeDeviance verbosity dt mm reCalc th0 = 
   flip P.catch (\(e :: GLM.GLMError) -> do
                      l <- getGLMExceptionLog
-                     liftIO $ putStrLn $ T.unpack ("Exception Log:\n" <> l)
-                     liftIO $ hFlush stdout
+                     P.logLE P.Diagnostic $ "Exception Log:\n" <> l
                      P.throw e
                  )
   $ P.wrapPrefix "minimizeDeviance" $ do
@@ -486,7 +485,6 @@ profiledDeviance
 profiledDeviance verbosity cf dt mm reCalc os vTh =
   P.wrapPrefix "profiledDeviance" $ do
 --    P.logLE P.Diagnostic $ "here"
-    liftIO $ hSetBuffering stdout NoBuffering
     let mX     = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         smZ    = GLM.recModelMatrix reCalc
         lambda = GLM.recMkLambda reCalc vTh
@@ -588,12 +586,16 @@ profiledDeviance' pdv dt mm zStar vTh os chol vEta svU =
       <> (T.pack $ show logLth)
       <> "; u.u="
       <> (T.pack $ show uDotu)
+      <> "; min mu="
+      <> (T.pack $ show $ VS.minimum vMu)
+      <> "; max mu="
+      <> (T.pack $ show $ VS.maximum vMu)
     (pd, rTheta2) <- case mm of
       GLM.LinearMixedModel _ -> do
         when (os /= Optim_LMM)
           $ P.throw
           $ GLM.OtherGLMError
-              "In profiledDeviance': OptimzationStage must be Optim_LMM for all LMM calls"
+              "In profiledDeviance': OptimizationStage must be Optim_LMM for all LMM calls"
         let
           n             = LA.size vY
           vW            = VS.replicate n 1.0
@@ -642,7 +644,7 @@ data CholeskySolutions = CholeskySolutions { lTheta :: GLM.LMatrix
                                            , rXX :: GLM.RxxMatrix
                                            } deriving (Show)
 
-data NormalEquations = NormalEquationsLMM | NormalEquationsGLMM GLM.WMatrix GLM.LinkFunction GLM.EtaVec GLM.UVec
+data NormalEquations = NormalEquationsLMM | NormalEquationsGLMM GLM.WMatrix (VS.Vector Double) GLM.LinkFunction GLM.EtaVec GLM.MuVec GLM.UVec
 
 normalEquationsRHS
   :: GLM.EffectsIO r
@@ -658,7 +660,7 @@ normalEquationsRHS NormalEquationsLMM smUt mVt vY =
 --    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svRhsZ, vRhsX))
     return (svRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 
-normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) smUt mVt vY =
+normalEquationsRHS (NormalEquationsGLMM vVarW vM lf vEta vMu svU) smUt mVt vY =
   P.wrapPrefix "normalEquationsRHS" $ do
     P.logLE P.Diagnostic "Starting..."
 --    P.logLE P.Diagnostic $ "vVarW=" <> (T.pack $ show vVarW)
@@ -667,16 +669,17 @@ normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) smUt mVt vY =
 --    P.logLE P.Diagnostic $ "mVt=" <> (T.pack $ show mVt)
 --    P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
 --    P.logLE P.Diagnostic $ "vEta=" <> (T.pack $ show vEta)
-    let vMu     = VS.map (GLM.invLink lf) vEta
-        vM      = VS.map (GLM.derivInv lf) vEta
+    let --vMu     = VS.map (GLM.invLink lf) vEta
+--        vM      = VS.map (GLM.derivInv lf) vEta
         vYMinusMu   = vY - vMu        
         vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVarW vY vMu
-        v1 = VS.zipWith (\m yMinusMu -> yMinusMu / m) vM vYMinusMu
-        v2 = v1 + vEta
-        vR0 = VS.zipWith3 (\w m x -> sqrt w * m * x) vVarW vM v2
+--        v1 = VS.zipWith (\m yMinusMu -> yMinusMu / m) vM vYMinusMu
+--        v2 = v1 + vEta
+--        vR0 = VS.zipWith3 (\w m x -> sqrt w * m * x) vVarW vM v2
+--        vR0 = VS.zipWith4 (\w m ym eta -> sqrt w * (ym + (m * eta))) vVarW vM vYMinusMu vEta -- for equations for u, beta
+        vR0 = VS.zipWith (\w ym -> sqrt w * ym) vVarW vYMinusMu -- for equations for du, dBeta
         svUt_r0 = smUt SLA.#> (SD.toSparseVector vR0)
         vVt_r0 = mVt LA.#> vR0
---    P.logLE P.Diagnostic $ "vMu=" <> (T.pack $ show vMu)
 --    P.logLE P.Diagnostic $ "vM" <> (T.pack $ show vM)
 
     {-
@@ -689,7 +692,6 @@ normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) smUt mVt vY =
         vWrkResp
 -}
 --        vZ          = VS.zipWith (*) vMuEta vWtYMinusMu
-    let        vX          = vWtYMinusMu
 {-      
     P.logLE P.Diagnostic
       $  "vWtYminusMu="
@@ -697,12 +699,13 @@ normalEquationsRHS (NormalEquationsGLMM vVarW lf vEta svU) smUt mVt vY =
       <> "\nvWtWrkResp="
       <> (T.pack $ show vWtWrkResp)
 -}
-    let svUX   = smUt SLA.#> (SD.toSparseVector vX)
+    let svUX   = smUt SLA.#> (SD.toSparseVector vWtYMinusMu)
         svRhsZ = svUX SLA.^-^ svU
-        vRhsX  = mVt LA.#> vX
+        vRhsX  = mVt LA.#> vWtYMinusMu
 --    P.logLE P.Diagnostic $ "r0=" <> (T.pack $ show vR0)
 --    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svUt_r0, vVt_r0))
-    return (svUt_r0, vVt_r0)
+--    return (svUt_r0, vVt_r0)
+    return (svRhsZ, vRhsX)
 
 cholmodCholeskySolutionsLMM
   :: GLM.EffectsIO r
@@ -771,7 +774,7 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
     let
       mX          = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
       vY          = GLM.rmsObservations $ GLM.regressionModelSpec mm
-      vW          = GLM.glmmsWeights glmmSpec
+      vW          = GLM.weights mm
       od          = GLM.glmmsObservationsDistribution glmmSpec
       GLM.GLMMControls ul maxHalvings pirlsCC = GLM.glmmsControls glmmSpec
       n           = LA.size vY
@@ -784,17 +787,25 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
         mX
         zStar
         (GLM.LP_ComputeFrom $ GLM.BetaU vBeta0 svU0)
-{-        
+        
     P.logLE P.Diagnostic
-      $  "vEtaExact ="
-      <> (T.pack $ show vEtaExact)
-      <> "\nsvU0="
-      <> (T.pack $ show svU0)
-      <> "\nvBeta0="
-      <> (T.pack $ show vBeta0)
-      <> "\nvEta0="
-      <> (T.pack $ show vEta0)
--}
+      $  "min(vEtaExact)="
+      <> (T.pack $ show $ VS.minimum vEtaExact)
+      <>  "; max(vEtaExact)="
+      <> (T.pack $ show $ VS.maximum vEtaExact)
+      <> "\nmin(svU0)="
+      <> (T.pack $ show $ VB.minimum $ SLA.toVector svU0)
+      <> "; max(svU0)="
+      <> (T.pack $ show $ VB.maximum $ SLA.toVector svU0)
+      <> "\nmin(vBeta0)="
+      <> (T.pack $ show $ VS.minimum vBeta0)
+      <> "; max(vBeta0)="
+      <> (T.pack $ show $ VS.maximum vBeta0)
+      <> "\nmin(vEta0)="
+      <> (T.pack $ show $ VS.minimum vEta0)
+      <> "; max(vEta0)="
+      <> (T.pack $ show $ VS.maximum vEta0)
+
     let
       lf = GLM.linkFunction $ linkFunctionType mm
       pdFunction os chol x y =
@@ -806,9 +817,16 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
           <> (T.pack $ show n)
           <> "; pd="
           <> (T.pack $ show pdCurrent)
---          <> "; vEta="
---          <> (T.pack $ show vEta) 
-          <> ")"
+        P.logLE P.Diagnostic
+          $ "min(vEta)="
+          <> (T.pack $ show $ VS.minimum vEta) 
+          <> "; max(vEta)="
+          <> (T.pack $ show $ VS.maximum vEta)
+        P.logLE P.Diagnostic
+          $ "min(svU)="
+          <> (T.pack $ show $ VB.minimum $ SLA.toVector svU) 
+          <> "; max(svU)="
+          <> (T.pack $ show $ VB.maximum $ SLA.toVector svU) 
         (pd', vEta', svU', dBetaU, chol, smU) <- updateEtaBetaU
           cf
           mm
@@ -866,15 +884,20 @@ updateEtaBetaU cf mm maxHalvings zStar pdFunction vEta svU =
   P.wrapPrefix "updateEtaBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..." ---(Eta=" <> (T.pack $ show vEta) <> ")"
     let mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-        vBeta = betaFrom mX zStar svU vEta
+        vBeta = betaFrom mX zStar svU vEta        
         betaU0 = (GLM.BetaU vBeta svU)
-    (betaU, chol, smU, mV)             <- compute_dBetaU cf mm zStar vEta svU
-    let dBetaU = GLM.diffBetaU betaU betaU0
-    logOnGLMException $ "refine_dBetaU: "
+    P.logLE P.Diagnostic
+      $ "min(vBeta)="
+      <> (T.pack $ show $ VS.minimum vBeta) 
+      <> "; max(vBeta)="
+      <> (T.pack $ show $ VS.maximum vBeta)
+    (dBetaU, chol, smU, mV)             <- compute_dBetaU cf mm zStar vEta svU
+--    let dBetaU = GLM.diffBetaU betaU betaU0
+    logOnGLMException $ "updateEtaBetaU: "
       <> "beta0="
       <> (T.pack $ show $ GLM.bu_vBeta betaU0)
       <> "\nbeta="
-      <> (T.pack $ show $ GLM.bu_vBeta betaU)
+      <> (T.pack $ show $ GLM.bu_vBeta dBetaU)
       <> "\nEta="
       <> (T.pack $ show vEta)
       <> "\nDist="
@@ -970,38 +993,42 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
     check maxHalvings 1.0 []
 
 
--- glmer: updateXwts but also with lambda
+-- glmer: updateXwts but also with lambda, with mu tacked on to be handed up the chain
 spUV
-  :: GLM.MixedModel b g
+  :: GLM.EffectsIO r
+  => GLM.MixedModel b g
   -> GLM.ZStarMatrix
-  -> GLM.EtaVec
-  -> (GLM.UMatrix, GLM.VMatrix)
-spUV mm@(GLM.LinearMixedModel _) zStar _ =
+  -> GLM.WMatrix
+  -> VS.Vector Double
+  -> P.Sem r (GLM.UMatrix, GLM.VMatrix)
+spUV mm@(GLM.LinearMixedModel _) zStar _ _ = P.wrapPrefix "spUV" $ do
   let mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-  in  (GLM.smZS zStar, mX)
+  return (GLM.smZS zStar, mX)
 
-spUV mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar vEta =
+spUV mm@(GLM.GeneralizedLinearMixedModel _) zStar vVSW vM = P.wrapPrefix "spUV" $ do
   let mX    = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-      vW    = GLM.glmmsWeights glmmSpec
       smZS  = GLM.smZS zStar --GLM.makeZS reCalc vTh
-      vWUV  = weightsForUV mm vW vEta
+      vWUV  = VS.zipWith (\m vsw -> sqrt vsw * m) vM vVSW -- glmer: sqrtWrkWt ?
       smWUV = SLA.mkDiagonal (VS.length vWUV) $ VS.toList vWUV
       smU   = smWUV SLA.## smZS
       mV    = (LA.diag vWUV) LA.<> mX
-  in  (smU, mV)
+  P.logLE P.Diagnostic $ "min(vWUV)=" <> (T.pack $ show $ VS.minimum vWUV ) <> "; max(vWUV)=" <> (T.pack $ show $ VS.maximum vWUV )
+  return (smU, mV)
 
+{-
 -- glmer: sqrtWrkWt
-weightsForUV :: GLM.MixedModel b g -> GLM.WMatrix -> GLM.EtaVec -> GLM.WMatrix
-weightsForUV mm vW vEta = case useLink mm of
+weightsForUV :: GLM.MixedModel b g -> GLM.WMatrix -> VS.Vector Double -> GLM.EtaVec -> GLM.MuVec -> GLM.WMatrix
+weightsForUV mm vVSW vM vEta vMu = case useLink mm of
   GLM.UseCanonical -> GLM.canonicaldEtadMuOverVar (observationsDistribution mm) vEta
   GLM.UseOther _ ->     
     let lf       = GLM.linkFunction $ linkFunctionType mm
-        vMu      = VS.map (GLM.invLink lf) vEta
-        vdMudEta = VS.map (GLM.derivInv lf) vEta
+--
+--        vdMudEta = VS.map (GLM.derivInv lf) vEta
   --      vVariance = GLM.scaledVariance (observationsDistribution mm) vMu
-        vVSW     = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu --    
+--        vVSW     = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu --    
     in  VS.zipWith (\muEta vsw -> muEta * sqrt vsw) vdMudEta vVSW
 --    VS.zipWith3 (\w muEta var -> muEta * sqrt (w / var)) vW vdMudEta vVariance
+-}
 
 compute_dBetaU
   :: GLM.EffectsIO r
@@ -1013,17 +1040,20 @@ compute_dBetaU
   -> P.Sem
        r
        (GLM.BetaU, CholeskySolutions, SLA.SpMatrix Double, GLM.VMatrix)
-compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar vEta svU
+compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) zStar vEta svU
   = P.wrapPrefix "compute_dBetaU" $ do
     P.logLE P.Diagnostic "Starting..."
-    let mX        = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-        smZS      = GLM.smZS zStar --GLM.makeZS reCalc vTh
-        vW        = GLM.glmmsWeights glmmSpec
-        lf        = GLM.linkFunction $ linkFunctionType mm
-        (smU, mV) = spUV mm zStar vEta
-        vMu       = VS.map (GLM.invLink lf) vEta
-        vVarW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
-        neqs      = NormalEquationsGLMM vVarW lf vEta svU
+    let mX   = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+        smZS = GLM.smZS zStar --GLM.makeZS reCalc vTh
+        vW   = GLM.weights mm
+        lf   = GLM.linkFunction $ linkFunctionType mm
+        vMu  = VS.map (GLM.invLink lf) vEta
+        vM   = VS.map (GLM.derivInv lf) vEta
+        vVSW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
+    P.logLE P.Diagnostic $ "min(vMu)=" <> (T.pack $ show $ VS.minimum vMu) <> "; max(vMu)=" <> (T.pack $ show $ VS.maximum vMu)
+    P.logLE P.Diagnostic $ "min(vM)=" <> (T.pack $ show $ VS.minimum vM) <> "; max(vM)=" <> (T.pack $ show $ VS.maximum vM)
+    (smU, mV) <- spUV mm zStar vVSW vM 
+    let neqs = NormalEquationsGLMM vVSW vM lf vEta vMu svU
     (chol, dBetaU) <- cholmodCholeskySolutions' cf
                                                 (SLA.transpose smU)
                                                 mV
@@ -1083,13 +1113,10 @@ pirlsConvergence glmm@(GLMM mm _ _ glmmC) smZS smP smL smU vEta vEta' svU svdU
 computeEta0 :: GLM.LinkFunctionType -> GLM.Observations -> GLM.EtaVec
 computeEta0 lft vY =
   let lF = GLM.link $ GLM.linkFunction lft
-      lowerBound lb x = if x < lb then lb else x
-      upperBound ub x = if x > ub then ub else x
-      bounded lb ub = lowerBound lb . upperBound ub
       f x = case lft of
         GLM.IdentityLink    -> x
-        GLM.LogisticLink    -> bounded 0.00001 0.99999 x --minimum (maximum (0.0001, x), 0.99999)
-        GLM.ExponentialLink -> lowerBound 0.0001 x
+        GLM.LogisticLink    -> GLM.bounded 0.00001 0.99999 x --minimum (maximum (0.0001, x), 0.99999)
+        GLM.ExponentialLink -> max 0.0001 x
   in  VS.map (lF . f) vY
 
 -- NB: eta = X <*> Beta + Z* <*> u
@@ -1107,9 +1134,9 @@ betaFrom mX zStar svU vEta =
   let vZSu = SD.toDenseVector $ (GLM.smZS zStar) SLA.#> svU
       vRhs = LA.tr mX LA.#> (vEta - vZSu)
       xTx = LA.tr mX LA.<> mX
---      xTx' = Trace.traceShow ("xTx=" ++ show xTx) xTx
+      xTx' = Trace.traceShow ("xTx=" ++ show xTx) xTx
       cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
---      cXtX' = Trace.traceShow ("cXtX=" ++ show cXtX) cXtX
+      cXtX' = Trace.traceShow ("cXtX=" ++ show cXtX) cXtX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
 
 cholmodCholeskySolutions'
@@ -1128,10 +1155,10 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
         (_, p)                    = LA.size mV
         (q, _)                    = SLA.dim smUt
     -- Cholesky factorize to get L_theta *and* update factor for solving with it
-    P.logLE P.Diagnostic "Starting..."
+    P.logLE P.Diagnostic "factorizing..."
     -- TODO: Cholmod has built in support for factorizing XtX + a * I.  Use it.
     let cfs = CH.FactorizeAtAPlusBetaI 1
-    liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt
+    liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt    
     (svRhsZ, vRhsX) <- normalEquationsRHS nes smUt (LA.tr mV) vY
 {-    
     P.logLE P.Diagnostic

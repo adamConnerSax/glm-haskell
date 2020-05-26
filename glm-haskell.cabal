@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: bdf154ca3dd65ff986d448b7787e1b7dd330a7c92143d836612a7cb252dc102b
+-- hash: 874384efc5ef3f0f67b3be205c60ef49cdbcb9a945b54053498a7d6c021089ff
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -76,6 +76,7 @@ library
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
     , math-functions >=0.3.0 && <0.4
@@ -130,6 +131,7 @@ test-suite CHOLMOD-test
     , hcholmod
     , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
     , math-functions >=0.3.0 && <0.4
@@ -172,6 +174,7 @@ test-suite GLMM-test
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
     , math-functions >=0.3.0 && <0.4
@@ -217,6 +220,7 @@ test-suite LMM-test
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
+    , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
     , knit-haskell >=0.7.0 && <0.9
     , math-functions >=0.3.0 && <0.4

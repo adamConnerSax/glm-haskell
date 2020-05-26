@@ -46,7 +46,7 @@ import           System.IO                      ( hSetBuffering
                                                 , stdout
                                                 , BufferMode(..)
                                                 )
-verbose = False
+verbose = True
 
 runFIO =
   let runGLMEffects = if verbose then runEffectsVerboseIO else runEffectsIO

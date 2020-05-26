@@ -383,8 +383,13 @@ conditionalCovariances mm cf reCalc vTh betaU = do
       smLambda                = (GLM.recMkLambda reCalc) vTh
       smLambdat               = SLA.transpose smLambda
       vEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
-      (smU, _)                = GLM.spUV mm zStar vEta
-      lf                      = GLM.linkFunction $ GLM.linkFunctionType mm
+      lf        = GLM.linkFunction $ GLM.linkFunctionType mm
+      vMu       = VS.map (GLM.invLink lf) vEta
+      vM        = VS.map (GLM.derivInv lf) vEta
+      vW        = GLM.weights mm
+      vVSW = GLM.varianceScaledWeights (GLM.observationsDistribution mm) vW vMu
+  (smU, _) <- GLM.spUV mm zStar vVSW vM 
+  let lf                      = GLM.linkFunction $ GLM.linkFunctionType mm
       sigma2                  = GLM.devScale (GLM.observationsDistribution mm)
                                              (GLM.weights mm)
                                              (GLM.observations mm)

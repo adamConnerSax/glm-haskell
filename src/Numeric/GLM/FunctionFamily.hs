@@ -23,6 +23,8 @@ import qualified Statistics.Distribution.Normal
                                                as S
 
 
+import qualified Numeric.IEEE as IEEE
+
 data BinomialCount = CountOne Int | CountEach (VS.Vector Int)
 
 data ObservationDistribution = DNormal
@@ -52,19 +54,39 @@ canonicalLink Bernoulli    = LogisticLink
 canonicalLink Poisson      = ExponentialLink
 canonicalLink Gamma        = ReciprocalLink
 
+bounded :: Ord a => a -> a -> a -> a
+bounded lb ub = max lb . min ub
+
+unitEpsilonBounded :: (Ord a, IEEE.IEEE a) => a -> a
+unitEpsilonBounded = let eps = IEEE.epsilon in bounded eps (1 - eps)
+
+epsilonAwayFrom0 :: (Num a, Ord a, IEEE.IEEE a) => a -> a
+epsilonAwayFrom0 x =
+  let eps = IEEE.epsilon
+  in if x > eps then x
+     else if x < -eps then x
+          else eps * signum x
+               
+-- inv is clamped within [epsilon, 1 - epsilon]
 linkFunction :: LinkFunctionType -> LinkFunction
 linkFunction IdentityLink = LinkFunction id id (const 1)
 linkFunction LogisticLink = LinkFunction
-  (\mu -> log (mu / (1 - mu)))
-  (\eta -> let y = exp (-eta) in 1 / (1 + y))
+  (\mu -> let mu' = unitEpsilonBounded mu in  log (mu' / ( 1 - mu'))) -- eta (mu)
+  (\eta -> let y = exp (-eta) in unitEpsilonBounded (1/(1+y))) -- mu (eta) 
   (\eta ->
-    let y = exp (-eta)
+    let eps :: Double = IEEE.epsilon
+        y = exp (-eta)        
         z = 1 + y
-    in  y / (z * z)
+    in  max eps (y / (z * z))
   )
+
+-- TODO; do something about x == 0  
 linkFunction ExponentialLink = LinkFunction log exp exp
 linkFunction ReciprocalLink =
-  LinkFunction (\x -> -1 / x) (\x -> -1 / x) (\x -> 1 / (x * x))
+  LinkFunction
+  (\x -> -1 / epsilonAwayFrom0 x)
+  (\x -> -1 / epsilonAwayFrom0 x)
+  (\x -> 1 / epsilonAwayFrom0 (x * x))
 
 data UseLink = UseCanonical | UseOther LinkFunctionType deriving (Show, Eq)
 -- notation here:
@@ -90,18 +112,18 @@ devianceOne :: ObservationDistribution -> Double -> Double -> Double
 devianceOne DNormal    y mu = let z = (y - mu) in z * z
 devianceOne DBernoulli y mu = -2 * (y * log mu + (1 - y) * log (1 - mu))
 devianceOne (DBinomial n) y mu =
-  let eps = 1e-12
+  let eps = IEEE.epsilon
       x   = if y < eps
-        then negate $ log (1 - mu)
-        else if (1 - y) < eps
-          then negate $ log mu
-          else (y * log (y / mu) + (1 - y) * log ((1 - y) / (1 - mu)))
+        then negate $ log (1 - (min (1 - eps) mu))
+        else if y > (1 - eps)
+          then negate $ log $ max eps mu
+          else (y * log (y / (max eps mu) + (1 - y) * log ((1 - y) / (1 - (min (1 - eps) mu)))))
   in  2 * (realToFrac n) * x -- should this be multiplied by n?
 devianceOne DPoisson y mu =
-  let eps = 1e-12
-      x   = if y < eps then mu else (y * log (y / mu) - (y - mu))
+  let eps = IEEE.epsilon
+      x   = if y < eps then mu else (y * log (y / (min eps mu)) - (y - mu))
   in  2 * x
-devianceOne DGamma y mu = 2 * ((y - mu) / mu - log (y / mu))
+devianceOne DGamma y mu = let mu' = min IEEE.epsilon mu in 2 * ((y - mu) / mu' - log (y / mu'))
 
 deviance
   :: ObservationsDistribution

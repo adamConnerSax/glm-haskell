@@ -28,6 +28,7 @@ dependencies:
 - hcholmod >= 0.1.0 && < 0.2
 - hmatrix >= 0.19.0 && < 0.21
 - hmatrix-nlopt >= 0.1.2 && < 0.2
+- ieee754 >= 0.8.0 && < 0.9
 - kazura-queue >= 0.1.0 && < 0.2 
 - knit-haskell >= 0.7.0 && < 0.9
 - math-functions >= 0.3.0 && < 0.4
