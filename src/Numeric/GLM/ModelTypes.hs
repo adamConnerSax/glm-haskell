@@ -64,6 +64,7 @@ module Numeric.GLM.ModelTypes
   , diffBetaU
   , makeZS
   , ZStarMatrix(smZS)
+--  , zeroZStar
   , RandomEffectCalculated(..)
   , PMatrix
   )
@@ -321,32 +322,37 @@ makeZS reCalc vTh =
   in  ZStar (smZ SLA.## (mkLambda vTh))
 
 
+--zeroZStar :: ZStarMatrix -> ZStarMatrix
+--zeroZStar (ZStar (SLA.SM (r, c) _)) = ZStar $ SLA.zeroSM r c  
+
 --data LinearPredictorComponents = LPComponents FixedPredictors ZStarMatrix BetaU
 
-data LinearPredictor = LP_Computed EtaVec | LP_ComputeFrom BetaU deriving (Show)
+data LinearPredictor = LP_Computed EtaVec | LP_ComputeFrom BetaU  deriving (Show)
 
 
 denseLinearPredictor
-  :: FixedPredictors -> ZStarMatrix -> LinearPredictor -> EtaVec
+  :: FixedPredictors -> Maybe ZStarMatrix -> LinearPredictor -> EtaVec
 denseLinearPredictor _ _ (LP_Computed x) = x
-denseLinearPredictor mX zStar (LP_ComputeFrom betaU) =
-  mX
-    LA.#> (bu_vBeta betaU)
-    +     (SD.toDenseVector $ (smZS zStar) SLA.#> bu_svU betaU)
+denseLinearPredictor mX zStarM (LP_ComputeFrom betaU) =
+  let atZeroU = mX LA.#> (bu_vBeta betaU)
+  in case zStarM of
+    Nothing -> atZeroU
+    Just zStar -> atZeroU + (SD.toDenseVector $ (smZS zStar) SLA.#> bu_svU betaU)
+
 
 diffLinearPredictor
   :: FixedPredictors
-  -> ZStarMatrix
+  -> Maybe ZStarMatrix
   -> LinearPredictor
   -> LinearPredictor
   -> LinearPredictor
-diffLinearPredictor mX zStar (LP_ComputeFrom buX) (LP_ComputeFrom buY) =
-  LP_Computed $ denseLinearPredictor mX zStar $ LP_ComputeFrom $ diffBetaU buX
+diffLinearPredictor mX zStarM (LP_ComputeFrom buX) (LP_ComputeFrom buY) =
+  LP_Computed $ denseLinearPredictor mX zStarM $ LP_ComputeFrom $ diffBetaU buX
                                                                            buY
-diffLinearPredictor mX zStar lpX lpY = LP_Computed (vEtaX - vEtaY)
+diffLinearPredictor mX zStarM lpX lpY = LP_Computed (vEtaX - vEtaY)
  where
-  vEtaX = denseLinearPredictor mX zStar lpX
-  vEtaY = denseLinearPredictor mX zStar lpY
+  vEtaX = denseLinearPredictor mX zStarM lpX
+  vEtaY = denseLinearPredictor mX zStarM lpY
 
 --updateLinearPredictor :: Double -> BetaU -> FixedPredictors -> ZStarMatrix -> LinearPredictor -> LinearPredictor
 --updateLinearPredictor x dBetaU mX zStar lp = go (GLM.scaleBetaU x dBetaU) mX zStar lp where

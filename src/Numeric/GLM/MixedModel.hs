@@ -194,7 +194,7 @@ minimizeDeviance verbosity dt mm reCalc th0 =
       let
         mX    = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         zStar = GLM.makeZS reCalc vTh
-        vEta  = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
+        vEta  = GLM.denseLinearPredictor mX (Just zStar) (GLM.LP_ComputeFrom betaU)
         vMu = LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType mm)) vEta
       return (res, vMu, cholmodAnalysis)
 
@@ -756,6 +756,7 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       (_, _, smP) = cf
       vEtaExact   = computeEta0 (linkFunctionType mm) vY
       svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
+    (vEta0, vBeta0, svU0, _) = 
       vBeta0      = betaFrom mX zStar svU0 vEtaExact -- approximate fit with no random effects
       vEta0       = GLM.denseLinearPredictor
         mX
@@ -780,92 +781,130 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       <> "; max(vEta0)="
       <> (T.pack $ show $ VS.maximum vEta0)
 
+
+
     let
       lf = GLM.linkFunction $ linkFunctionType mm
       pdFunction os chol x y =
         fst <$> profiledDeviance' PDVNone ML mm zStar vTh os chol x y
       --incS betaU dBetaU x = addBetaU betaU (scaleBetaU x dBetaU)
-      iterateUntilConverged n pdCurrent vEta svU = do
-        P.logLE P.Diagnostic
-          $  "iterateUntilConverged (n="
-          <> (T.pack $ show n)
-          <> "; pd="
-          <> (T.pack $ show pdCurrent)
-        P.logLE P.Diagnostic
-          $ "min(vEta)="
-          <> (T.pack $ show $ VS.minimum vEta) 
-          <> "; max(vEta)="
-          <> (T.pack $ show $ VS.maximum vEta)
-        P.logLE P.Diagnostic
-          $ "min(svU)="
-          <> (T.pack $ show $ VB.minimum $ SLA.toVector svU) 
-          <> "; max(svU)="
-          <> (T.pack $ show $ VB.maximum $ SLA.toVector svU) 
-        (pd', vEta', svU', dBetaU, chol, smU) <- updateEtaBetaU
-          cf
-          mm
-          maxHalvings
-          zStar
-          (pdFunction os)
-          vEta
-          svU
-        cc <- case GLM.pirlsConvergenceType pirlsCC of
-          GLM.PCT_Eta -> do
-            let dEta = (vEta - vEta') -- GLM.diffLinearPredictor mX zStar lp lp'
-            return $ (LA.norm_2 dEta) / (LA.norm_2 vEta')
-          GLM.PCT_Deviance   -> return $ abs $ (pdCurrent - pd') / pd'
-          GLM.PCT_Orthogonal -> P.throw
-            $ GLM.OtherGLMError "ConvergeOrthognal not implemented yet."
-        case (cc < (GLM.pirlsTolerance pirlsCC), n) of
-          (True, _) ->
-            P.logLE P.Diagnostic "Converged." >> return (vEta', svU', chol)
-          (False, 1) -> P.throw
-            (GLM.OtherGLMError "Too many iterations in getCholeskySolutions.")
-          (False, m) -> do
-            P.logLE P.Diagnostic $ "Not converged.  cc=" <> (T.pack $ show cc)
-            iterateUntilConverged (m - 1) pd' vEta' svU'
-    (vEta', svU', chol) <- iterateUntilConverged (GLM.pirlsMaxSteps pirlsCC)
-                                                 (1.0 / 0.0) -- Infinity :: Double
-                                                 vEta0
-                                                 svU0
-    let vBeta' = betaFrom mX zStar svU' vEta'
+    
+    (vEta', vBeta', svU', chol) <- pirls
+                                   cf
+                                   mm
+                                   zStar
+                                   (GLM.pirlsMaxSteps pirlsCC) 
+                                   (1.0 / 0.0) -- Infinity :: Double
+                                   (pdFunction os)
+                                   vEta0
+                                   vBeta0
+                                   svU0
+--    let vBeta' = betaFrom mX zStar svU' vEta'
     P.logLE P.Diagnostic "Finished."
     return (chol, GLM.BetaU vBeta' svU')
+
+
+data PIRLS_Type = SolveBetaU ZStarMatrix | BetaAtZeroU
+
+pirls ::  GLM.EffectsIO r
+      => CholmodFactor
+      -> GLM.MixedModel b g
+      -> PIRLS_Type --GLM.ZStarMatrix -- ^ if this is nothing, we are only solving for beta
+      -> Int
+      -> Double 
+      -> (CholeskySolutions
+          -> GLM.EtaVec
+          -> GLM.UVec
+          -> P.Sem r Double
+         )
+      -> GLM.EtaVec
+      -> GLM.BetaVec
+      -> GLM.UVec
+      -> P.Sem r (GLM.EtaVec, GLM.BetaVec, GLM.UVec,  CholeskySolutions)
+
+pirls _ mm@(GLM.LinearMixedModel _) _ _ _ _ _ _ _ = P.throw $ GLM.OtherGLMError "Called pirls with a non-generalized mixed model."
+
+pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType n pdCurrent pdF vEta vBeta svU =
+  P.wrapPrefix "PIRLS" $ do
+    P.logLE P.Diagnostic
+      $  "iterateUntilConverged (n="
+        <> (T.pack $ show n)
+        <> "; pd="
+        <> (T.pack $ show pdCurrent)
+    P.logLE P.Diagnostic
+      $ "min(vEta)="
+        <> (T.pack $ show $ VS.minimum vEta) 
+        <> "; max(vEta)="
+        <> (T.pack $ show $ VS.maximum vEta)
+    P.logLE P.Diagnostic
+      $ "min(svU)="
+      <> (T.pack $ show $ VB.minimum $ SLA.toVector svU) 
+      <> "; max(svU)="
+      <> (T.pack $ show $ VB.maximum $ SLA.toVector svU)
+      <> ")"
+    let GLM.GLMMControls ul maxHalvings pirlsCC = GLM.glmmsControls glmmSpec
+    (pd', vEta', vBeta', svU', dBetaU, chol, smU) <- updateEtaBetaU
+                                                     cf
+                                                     mm
+                                                     maxHalvings
+                                                     pirlsType
+                                                     pdF
+                                                     vEta
+                                                     vBeta
+                                                     svU
+
+    cc <- case GLM.pirlsConvergenceType pirlsCC of
+      GLM.PCT_Eta -> do
+        let dEta = (vEta - vEta') -- GLM.diffLinearPredictor mX zStar lp lp'
+        return $ (LA.norm_2 dEta) / (LA.norm_2 vEta')
+      GLM.PCT_Deviance   -> return $ abs $ (pdCurrent - pd') / pd'
+      GLM.PCT_Orthogonal -> P.throw $ GLM.OtherGLMError "ConvergeOrthognal not implemented yet."
+
+    case (cc < (GLM.pirlsTolerance pirlsCC), n) of
+      (True, _) -> do
+        P.logLE P.Diagnostic "Converged."
+        return (vEta', vBeta', svU', chol)
+      (False, 1) -> P.throw $ GLM.OtherGLMError "Too many iterations in getCholeskySolutions."
+      (False, m) -> do
+        P.logLE P.Diagnostic $ "Not converged.  cc=" <> (T.pack $ show cc)
+        pirls cf mm pirlsType (m - 1) pd' pdF vEta' vBeta' svU'
 
 updateEtaBetaU
   :: GLM.EffectsIO r
   => CholmodFactor
   -> GLM.MixedModel b g
   -> Int
-  -> GLM.ZStarMatrix
+  -> PIRLS_Type
   -> (  CholeskySolutions
      -> GLM.EtaVec
      -> GLM.UVec
      -> P.Sem r Double
      )
   -> GLM.EtaVec
+  -> GLM.BetaVec
   -> GLM.UVec
   -> P.Sem
        r
        ( Double
        , GLM.EtaVec
+       , GLM.BetaVec
        , GLM.UVec
        , GLM.BetaU
        , CholeskySolutions
        , SLA.SpMatrix Double
        )
-updateEtaBetaU cf mm maxHalvings zStar pdFunction vEta svU =
+updateEtaBetaU cf mm maxHalvings pirlsType pdFunction vEta vBeta svU =
   P.wrapPrefix "updateEtaBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..." ---(Eta=" <> (T.pack $ show vEta) <> ")"
     let mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-        vBeta = betaFrom mX zStar svU vEta        
+--        vBeta = betaFrom mX zStar svU vEta        
         betaU0 = (GLM.BetaU vBeta svU)
     P.logLE P.Diagnostic
       $ "min(vBeta)="
       <> (T.pack $ show $ VS.minimum vBeta) 
       <> "; max(vBeta)="
       <> (T.pack $ show $ VS.maximum vBeta)
-    (dBetaU, chol, smU, mV)             <- compute_dBetaU cf mm zStar vEta svU
+    (dBetaU, chol, smU, mV)             <- compute_dBetaU cf mm pirlsType vEta svU
 --    let dBetaU = GLM.diffBetaU betaU betaU0
     logOnGLMException $ "updateEtaBetaU: "
       <> "beta0="
@@ -882,18 +921,19 @@ updateEtaBetaU cf mm maxHalvings zStar pdFunction vEta svU =
       <> (T.pack $ show (LA.tr mV LA.<> mV))
     (pdFinal, vEta', svU', dBetaU') <- refine_dBetaU mm
                                        maxHalvings
-                                       zStar
+                                       pirlsType
                                        (pdFunction chol)
                                        vEta
                                        svU
-                                       dBetaU                                       
+                                       dBetaU
+    let vBeta' = vBeta + (GLM.bu_vBeta dBetaU)
     P.logLE P.Diagnostic
       $  "Finished (||dU||^2 = "
       <> (T.pack $ show $ (GLM.bu_svU dBetaU' SLA.<.> GLM.bu_svU dBetaU'))
       <> "; ||dBeta||^2="
       <> (T.pack $ show $ (GLM.bu_vBeta dBetaU' LA.<.> GLM.bu_vBeta dBetaU'))
       <> ")." --- (Eta=" <> (T.pack $ show vEta') <> ")"
-    return (pdFinal, vEta', svU', dBetaU', chol, smU)
+    return (pdFinal, vEta', vBeta', svU', dBetaU', chol, smU)
 
 data ShrinkPD = Shrunk Double GLM.EtaVec GLM.UVec GLM.BetaU | NotShrunk Double deriving (Show)
 
@@ -901,13 +941,13 @@ refine_dBetaU
   :: GLM.EffectsIO r
   => GLM.MixedModel b g
   -> Int -- max step halvings
-  -> GLM.ZStarMatrix
+  -> PIRLS_Type
   -> (GLM.EtaVec -> GLM.UVec -> P.Sem r Double) -- profiled deviance
   -> GLM.EtaVec
   -> GLM.UVec
   -> GLM.BetaU
   -> P.Sem r (Double, GLM.EtaVec, GLM.UVec, GLM.BetaU)
-refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
+refine_dBetaU mm maxHalvings pirlsType pdF vEta svU dBetaU =
   P.wrapPrefix "refineDBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..."
     {-        
@@ -925,7 +965,7 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
 --        smZS = GLM.smZS zStar
     pd0 <- pdF vEta svU --vBeta svU
     let
-      vdEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom dBetaU)
+      vdEta = GLM.denseLinearPredictor mX pirlsType (GLM.LP_ComputeFrom dBetaU)
       checkOne x = do
         let deltaBetaU = GLM.scaleBetaU x dBetaU
             svU'       = svU SLA.^+^ (GLM.bu_svU deltaBetaU) --svBetaU' = incS svBetaU svdBetaU x
@@ -971,15 +1011,15 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
 spUV
   :: GLM.EffectsIO r
   => GLM.MixedModel b g
-  -> GLM.ZStarMatrix
+  -> PIRLS_Type
   -> GLM.WMatrix
   -> VS.Vector Double
   -> P.Sem r (GLM.UMatrix, GLM.VMatrix)
-spUV mm@(GLM.LinearMixedModel _) zStar _ _ = P.wrapPrefix "spUV" $ do
+spUV mm@(GLM.LinearMixedModel _) pirlsType _ _ = P.wrapPrefix "spUV" $ do
   let mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
   return (GLM.smZS zStar, mX)
 
-spUV mm@(GLM.GeneralizedLinearMixedModel _) zStar vVSW vM = P.wrapPrefix "spUV" $ do
+spUV mm@(GLM.GeneralizedLinearMixedModel _) pirlsType vVSW vM = P.wrapPrefix "spUV" $ do
   let mX    = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
       smZS  = GLM.smZS zStar --GLM.makeZS reCalc vTh
       vWUV  = VS.zipWith (\m vsw -> sqrt vsw * m) vM vVSW -- glmer: sqrtWrkWt ?
@@ -1008,13 +1048,13 @@ compute_dBetaU
   :: GLM.EffectsIO r
   => CholmodFactor
   -> GLM.MixedModel b g
-  -> GLM.ZStarMatrix
+  -> PIRLS_Type
   -> GLM.EtaVec
   -> GLM.UVec
   -> P.Sem
        r
        (GLM.BetaU, CholeskySolutions, SLA.SpMatrix Double, GLM.VMatrix)
-compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) zStar vEta svU
+compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) pirlsType vEta svU
   = P.wrapPrefix "compute_dBetaU" $ do
     P.logLE P.Diagnostic "Starting..."
     let mX   = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
