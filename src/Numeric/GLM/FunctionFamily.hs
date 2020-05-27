@@ -113,11 +113,12 @@ devianceOne DNormal    y mu = let z = (y - mu) in z * z
 devianceOne DBernoulli y mu = -2 * (y * log mu + (1 - y) * log (1 - mu))
 devianceOne (DBinomial n) y mu =
   let eps = IEEE.epsilon
+      mu' = unitEpsilonBounded mu
       x   = if y < eps
-        then negate $ log (1 - (min (1 - eps) mu))
+        then negate $ log (1 - mu')
         else if y > (1 - eps)
-          then negate $ log $ max eps mu
-          else (y * log (y / (max eps mu) + (1 - y) * log ((1 - y) / (1 - (min (1 - eps) mu)))))
+          then negate $ log mu'
+          else y * log (y / mu') + (1 - y) * log ((1 - y) / (1 - mu'))
   in  2 * (realToFrac n) * x -- should this be multiplied by n?
 devianceOne DPoisson y mu =
   let eps = IEEE.epsilon

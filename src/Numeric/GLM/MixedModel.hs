@@ -660,45 +660,19 @@ normalEquationsRHS NormalEquationsLMM smUt mVt vY =
 --    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svRhsZ, vRhsX))
     return (svRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 
-normalEquationsRHS (NormalEquationsGLMM vVarW vM lf vEta vMu svU) smUt mVt vY =
+normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu svU) smUt mVt vY =
   P.wrapPrefix "normalEquationsRHS" $ do
     P.logLE P.Diagnostic "Starting..."
---    P.logLE P.Diagnostic $ "vVarW=" <> (T.pack $ show vVarW)
---    P.logLE P.Diagnostic $ "svU=" <> (T.pack $ show svU)
---    P.logLE P.Diagnostic $ "smUt=" <> (T.pack $ show smUt)
---    P.logLE P.Diagnostic $ "mVt=" <> (T.pack $ show mVt)
---    P.logLE P.Diagnostic $ "vY=" <> (T.pack $ show vY)
---    P.logLE P.Diagnostic $ "vEta=" <> (T.pack $ show vEta)
-    let --vMu     = VS.map (GLM.invLink lf) vEta
---        vM      = VS.map (GLM.derivInv lf) vEta
-        vYMinusMu   = vY - vMu        
-        vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVarW vY vMu
+
+    let vYMinusMu   = vY - vMu        
+        vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVSW vY vMu
 --        v1 = VS.zipWith (\m yMinusMu -> yMinusMu / m) vM vYMinusMu
 --        v2 = v1 + vEta
 --        vR0 = VS.zipWith3 (\w m x -> sqrt w * m * x) vVarW vM v2
 --        vR0 = VS.zipWith4 (\w m ym eta -> sqrt w * (ym + (m * eta))) vVarW vM vYMinusMu vEta -- for equations for u, beta
-        vR0 = VS.zipWith (\w ym -> sqrt w * ym) vVarW vYMinusMu -- for equations for du, dBeta
+        vR0 = VS.zipWith (\w ym -> sqrt w * ym) vVSW vYMinusMu -- for equations for du, dBeta
         svUt_r0 = smUt SLA.#> (SD.toSparseVector vR0)
         vVt_r0 = mVt LA.#> vR0
---    P.logLE P.Diagnostic $ "vM" <> (T.pack $ show vM)
-
-    {-
-      vWrkResids  = VS.zipWith3 (\y mu muEta -> (y - mu) / muEta) vY vMu vMuEta
-      vWrkResp    = VS.zipWith (+) vEta vWrkResids
-      vWtWrkResp  = VS.zipWith3
-        (\wt muEta wrkResp -> muEta * (sqrt wt) * wrkResp)
-        vVarW
-        vMuEta
-        vWrkResp
--}
---        vZ          = VS.zipWith (*) vMuEta vWtYMinusMu
-{-      
-    P.logLE P.Diagnostic
-      $  "vWtYminusMu="
-      <> (T.pack $ show vWtYMinusMu)
-      <> "\nvWtWrkResp="
-      <> (T.pack $ show vWtWrkResp)
--}
     let svUX   = smUt SLA.#> (SD.toSparseVector vWtYMinusMu)
         svRhsZ = svUX SLA.^-^ svU
         vRhsX  = mVt LA.#> vWtYMinusMu
@@ -955,7 +929,7 @@ refine_dBetaU mm maxHalvings zStar pdF vEta svU dBetaU =
       checkOne x = do
         let deltaBetaU = GLM.scaleBetaU x dBetaU
             svU'       = svU SLA.^+^ (GLM.bu_svU deltaBetaU) --svBetaU' = incS svBetaU svdBetaU x
-            --vBeta'     = vBeta + (GLM.bu_vBeta deltaBetaU)
+             --vBeta'     = vBeta + (GLM.bu_vBeta deltaBetaU)
             vEta'      = vEta + (LA.scale x vdEta)
         pdNew <- pdF vEta' svU'
         return $ if (pdNew - pd0) / pd0 <= tol -- sometimes dBetaU is basically 0 because we are at a minimum.  So we need a little breathing room.
@@ -1051,14 +1025,22 @@ compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) zStar vEta svU
         vM   = VS.map (GLM.derivInv lf) vEta
         vVSW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
     P.logLE P.Diagnostic $ "min(vMu)=" <> (T.pack $ show $ VS.minimum vMu) <> "; max(vMu)=" <> (T.pack $ show $ VS.maximum vMu)
-    P.logLE P.Diagnostic $ "min(vM)=" <> (T.pack $ show $ VS.minimum vM) <> "; max(vM)=" <> (T.pack $ show $ VS.maximum vM)
-    (smU, mV) <- spUV mm zStar vVSW vM 
+    P.logLE P.Diagnostic $ "min(vM)=" <> (T.pack $ show $ VS.minimum vM) <> "; max(vM)=" <> (T.pack $ show $ VS.maximum vM)    
+    P.logLE P.Diagnostic $ "min(vVSW)=" <> (T.pack $ show $ VS.minimum vVSW) <> "; max(vVSW)=" <> (T.pack $ show $ VS.maximum vVSW)
+    P.logLE P.Diagnostic "Computing U and V"
+    (smU, mV) <- spUV mm zStar vVSW vM
+--    P.logLE P.Diagnostic $ "mVtV=" <> (T.pack $ show $ LA.tr mV LA.<> mV)
     let neqs = NormalEquationsGLMM vVSW vM lf vEta vMu svU
     (chol, dBetaU) <- cholmodCholeskySolutions' cf
                                                 (SLA.transpose smU)
                                                 mV
                                                 neqs
                                                 (GLM.mixedModelSpec mm)
+    P.logLE P.Diagnostic $ "min(dBeta)=" <> (T.pack $ show $ VS.minimum $ GLM.bu_vBeta dBetaU) <> "; max(dBeta)=" <> (T.pack $ show $ VS.maximum $ GLM.bu_vBeta dBetaU)
+    P.logLE P.Diagnostic $ "min(du)="
+      <> (T.pack $ show $ VB.minimum $ SLA.toVector $ GLM.bu_svU dBetaU)
+      <> "; max(dU)="
+      <> (T.pack $ show $ VB.maximum $ SLA.toVector $ GLM.bu_svU dBetaU)    
     P.logLE P.Diagnostic "Finished."
     return (dBetaU, chol, smU, mV)
 
@@ -1133,10 +1115,8 @@ betaFrom
 betaFrom mX zStar svU vEta =
   let vZSu = SD.toDenseVector $ (GLM.smZS zStar) SLA.#> svU
       vRhs = LA.tr mX LA.#> (vEta - vZSu)
-      xTx = LA.tr mX LA.<> mX
-      xTx' = Trace.traceShow ("xTx=" ++ show xTx) xTx
+      xTx = LA.tr mX LA.<> mX      
       cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
-      cXtX' = Trace.traceShow ("cXtX=" ++ show cXtX) cXtX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
 
 cholmodCholeskySolutions'
@@ -1185,13 +1165,18 @@ cholmodCholeskySolutions' cholmodFactor smUt mV nes mixedModelSpec =
     let vTvMinusRzxTRzx =
           ((LA.tr mV) LA.<> mV)  - (SD.toDenseMatrix $ smRzx SLA.#^# smRzx)
 --    liftIO $ putStrLn $ "mV=" ++ show mV
---    liftIO $ putStrLn $ "Rzx=" ++ show smRzx
---    liftIO $ putStrLn $ "vtVMinusRzxTRzx=" ++ (show vTvMinusRzxTRzx)
+--    P.logLE P.Diagnostic $ "Rzx=" <> (T.pack $ show smRzx)
+--    P.logLE P.Diagnostic $ "vtVMinusRzxTRzx=" <> (T.pack $ show vTvMinusRzxTRzx)
     let mRxx            = LA.chol $ LA.trustSym $ vTvMinusRzxTRzx -- mRxx' mRxx = v'v - Rzx'Rzx
-
+--    P.logLE P.Diagnostic $ "mRxx=" <> (T.pack $ show mRxx)
+    
     -- now we have the entire Cholesky decomposition.  Solve the normal equations
     let vRzxtC          = SD.toDenseVector $ (SLA.transposeSM smRzx) SLA.#> svC
-        betaSols        = LA.cholSolve mRxx (LA.asColumn $ vRhsX - vRzxtC)
+        vBetaRhs         = vRhsX - vRzxtC
+--    P.logLE P.Diagnostic $ "vRhsX=" <> (T.pack $ show vRhsX)
+--    P.logLE P.Diagnostic $ "vRzxtC=" <> (T.pack $ show vRzxtC)
+--    P.logLE P.Diagnostic $ "vBetaRHS=" <> (T.pack $ show vBetaRhs)    
+    let betaSols        = LA.cholSolve mRxx (LA.asColumn $ vBetaRhs)
         vBeta           = head $ LA.toColumns $ betaSols
         svBeta          = SD.toSparseVector vBeta
         svRzxBeta       = smRzx SLA.#> svBeta
