@@ -165,7 +165,8 @@ minimizeDeviance
        ( ( GLM.CovarianceVec
          , Double
          , Double
-         , GLM.BetaU
+         , GLM.BetaVec
+         , GLM.UVec
          , LA.Vector Double
          , CholeskySolutions
          )
@@ -185,16 +186,16 @@ minimizeDeviance verbosity dt mm reCalc th0 =
       P.logLE P.Diagnostic "Beginning Cholmod analysis of Z matrix structure."
       cholmodAnalysis <- cholmodAnalyzeProblem reCalc
       P.logLE P.Diagnostic "Finished Cholmod analysis of Z matrix structure."
-      res@(vTh, _, dev2, betaU, _, _) <- minimizeDevianceInner verbosity
-                                         dt
-                                         mm
-                                         reCalc
-                                         cholmodAnalysis
-                                         th0
+      res@(vTh, _, dev2, vBeta, mzvU, _, _) <- minimizeDevianceInner verbosity
+                                               dt
+                                               mm
+                                               reCalc
+                                               cholmodAnalysis
+                                               th0
       let
         mX    = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         zStar = GLM.makeZS reCalc vTh
-        vEta  = GLM.denseLinearPredictor mX (Just zStar) (GLM.LP_ComputeFrom betaU)
+        vEta  = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom vBeta mzvU)
         vMu = LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType mm)) vEta
       return (res, vMu, cholmodAnalysis)
 
@@ -213,8 +214,9 @@ minimizeDevianceInner
        ( GLM.CovarianceVec
        , Double
        , Double
-       , GLM.BetaU
-       , LA.Vector Double
+       , GLM.BetaVec
+       , GLM.MaybeZeroUVec
+       , GLM.MaybeZeroBVec
        , CholeskySolutions
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
 minimizeDevianceInner verbosity dt mm reCalc cf th0 =
@@ -234,11 +236,12 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
              r
              ( Double
              , Double
-             , GLM.BetaU
-             , SLA.SpVector Double
+             , GLM.BetaVec
+             , GLM.MaybeZeroUVec
+             , GLM.MaybeZeroBVec
              , CholeskySolutions
              )
-      pd os x = profiledDeviance pdv cf dt mm reCalc os x
+      pd os x = profiledDeviance pdv cf dt mm reCalc os (Just x)
       obj x = unsafePerformEffects
         (verbosity >= MDVSimple)
         (fmap (\(d, _, _, _, _) -> d) $ pd objectiveOs x)
@@ -263,8 +266,8 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
           <> (T.pack $ show result)
           <> ") reached! At th="
           <> (T.pack $ show thS)
-        (pdVal, sigma2, betaU, svb, cs) <- pd finalOs thS
-        return (thS, pdVal, sigma2, betaU, SD.toDenseVector svb, cs)
+        (pdVal, sigma2, vBeta, mzvU, mzvB, cs) <- pd finalOs thS
+        return (thS, pdVal, sigma2, vBeta, mzvU, fmap SD.toDenseVector mzvB, cs)
 
 
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
@@ -473,35 +476,37 @@ profiledDeviance
   -> GLM.MixedModel b g
   -> GLM.RandomEffectCalculated
   -> OptimizationStage
-  -> GLM.CovarianceVec -- ^ theta
+  -> Maybe GLM.CovarianceVec -- ^ theta
   -> P.Sem
        r
        ( Double
        , Double
-       , GLM.BetaU
-       , SLA.SpVector Double
+       , GLM.BetaVec
+       , GLM.MaybeZeroUVec
+       , GLM.MaybeZeroBVec
        , CholeskySolutions
        ) -- ^ (pd, sigma^2, beta, u, b) 
-profiledDeviance verbosity cf dt mm reCalc os vTh =
+profiledDeviance verbosity cf dt mm reCalc os vThM =
   P.wrapPrefix "profiledDeviance" $ do
 --    P.logLE P.Diagnostic $ "here"
     let mX     = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         smZ    = GLM.recModelMatrix reCalc
-        lambda = GLM.recMkLambda reCalc vTh
         vY     = GLM.rmsObservations $ GLM.regressionModelSpec mm
         n      = LA.size vY
         (_, p) = LA.size mX
         (_, q) = SLA.dim smZ
-        zStar  = GLM.makeZS reCalc vTh
+        vTh = fromMaybe (setCovarianceVector (GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm) 0 0) vThM 
+        lambda = GLM.recMkLambda reCalc vTh
+        zStar = fmap (GLM.makeZS reCalc) vTh
 
     P.logLE P.Diagnostic "Starting. Calling getCholeskySolutions."
-    (cs@(CholeskySolutions smLth smRzx mRxx), betaU) <- getCholeskySolutions
+    (cs@(CholeskySolutions smLth smRzx mRxx), vBeta, mzvU) <- getCholeskySolutions
       cf
       mm
       zStar
       os
-      vTh
-    when (verbosity == PDVAll) $ liftIO $ do
+      vThM
+    when (verbosity == PDVAll) $ liftIO $ do -- needs to be in IO for some of the show functions :(
       putStrLn "Z"
       LA.disp 2 $ SD.toDenseMatrix smZ
       putStrLn "Lambda"
@@ -513,16 +518,16 @@ profiledDeviance verbosity cf dt mm reCalc os vTh =
       putStrLn "Rxx"
       LA.disp 2 mRxx
     let osFinal = if (GLM.generalized mm) then Optim_GLMM_Final else Optim_LMM
-        vEta    = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
+        vEta    = GLM.denseLinearPredictor mX zStarM (GLM.LP_ComputeFrom vBeta mzvU)
     (pd, rTheta2) <- profiledDeviance' verbosity
                                        dt
                                        mm
-                                       zStar
+                                       zStarM
                                        vTh
                                        osFinal
                                        cs
                                        vEta
-                                       (GLM.bu_svU betaU)
+                                       vBeta
     let dof = case dt of
           ML   -> realToFrac n
           REML -> realToFrac (n - p)
@@ -540,9 +545,8 @@ profiledDeviance verbosity cf dt mm reCalc os vTh =
       putStrLn $ "2 * logDet=" ++ show (2 * logDet)
     when (verbosity == PDVAll || verbosity == PDVSimple) $ liftIO $ do
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
-    let svb = lambda SLA.#> (GLM.bu_svU betaU)
-    return (pd, sigma2, betaU, svb, cs)
-
+    let mzvB = fmap (\svU -> lambda SLA.#> svU) mzvU
+    return (pd, sigma2, vBeta, mzvU, mzvB, cs)
 
 
 profiledDeviance'
@@ -550,14 +554,14 @@ profiledDeviance'
   => ProfiledDevianceVerbosity
   -> DevianceType
   -> GLM.MixedModel b g
-  -> GLM.ZStarMatrix
+  -> Maybe GLM.ZStarMatrix
   -> GLM.CovarianceVec
   -> OptimizationStage
   -> CholeskySolutions
   -> GLM.EtaVec
   -> GLM.UVec
   -> P.Sem r (Double, Double) -- profiled deviance, deviance + u'u 
-profiledDeviance' pdv dt mm zStar vTh os chol vEta svU =
+profiledDeviance' pdv dt mm zStarM vTh os chol vEta svU =
   P.wrapPrefix "profiledDeviance'" $ do
     P.logLE P.Diagnostic
       $  "Starting ("
@@ -577,7 +581,7 @@ profiledDeviance' pdv dt mm zStar vTh os chol vEta svU =
           ( GLM.glmmsObservationsDistribution glmmSpec
           , GLM.glmmsWeights glmmSpec
           )
-      logLth = logDetTriangularSM (lTheta chol)
+      logLth = maybe 0 (const $ logDetTriangularSM (lTheta chol)) zStarM
 --      smZS   = GLM.makeZS reCalc vTh
       vMu = LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType mm)) vEta
       uDotu = svU SLA.<.> svU
@@ -755,14 +759,15 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       (_, q)      = SLA.dim (GLM.smZS zStar)
       (_, _, smP) = cf
       vEtaExact   = computeEta0 (linkFunctionType mm) vY
+      vBeta0'     = betaFrom mX zStar svU0 vEtaExact -- approximate fit with no random effects
       svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
-    (vEta0, vBeta0, svU0, _) = 
-      vBeta0      = betaFrom mX zStar svU0 vEtaExact -- approximate fit with no random effects
+    (vEta0, vBeta0, svU0, _) <- pirls cf mm BetaAtZeroU  (GLM.pirlsMaxSteps pirlsCC) (1.0 / 0.0) vEtaExact vBeta0' svU0
+{-
       vEta0       = GLM.denseLinearPredictor
         mX
         zStar
         (GLM.LP_ComputeFrom $ GLM.BetaU vBeta0 svU0)
-        
+-}        
     P.logLE P.Diagnostic
       $  "min(vEtaExact)="
       <> (T.pack $ show $ VS.minimum vEtaExact)
@@ -792,7 +797,7 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
     (vEta', vBeta', svU', chol) <- pirls
                                    cf
                                    mm
-                                   zStar
+                                   (SolveBetaU zStar)
                                    (GLM.pirlsMaxSteps pirlsCC) 
                                    (1.0 / 0.0) -- Infinity :: Double
                                    (pdFunction os)
@@ -804,7 +809,7 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
     return (chol, GLM.BetaU vBeta' svU')
 
 
-data PIRLS_Type = SolveBetaU ZStarMatrix | BetaAtZeroU
+data PIRLS_Type = SolveBetaU GLM.ZStarMatrix | BetaAtZeroU
 
 pirls ::  GLM.EffectsIO r
       => CholmodFactor
@@ -1158,6 +1163,20 @@ betaFrom mX zStar svU vEta =
       xTx = LA.tr mX LA.<> mX      
       cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
+
+{-
+glmBeta
+  :: GLM.FixedPredictors
+  -> GLM.UVec
+  -> GLM.EtaVec
+  -> GLM.BetaVec
+glmBeta mX zStar svU vEta =
+  let vZSu = SD.toDenseVector $ (GLM.smZS zStar) SLA.#> svU
+      vRhs = LA.tr mX LA.#> (vEta - vZSu)
+      xTx = LA.tr mX LA.<> mX      
+      cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
+  in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)  
+-}
 
 cholmodCholeskySolutions'
   :: GLM.EffectsIO r

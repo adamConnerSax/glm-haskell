@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
@@ -56,12 +57,20 @@ module Numeric.GLM.ModelTypes
   , LinearPredictor(..)
   , denseLinearPredictor
   , diffLinearPredictor
+  , MaybeZeroUVec
+  , zeroVec
+  , useMaybeZeroVec
+  , scaleMZU
+  , addMZU
+  , diffMZU
+  , MaybeZeroBVec
+  , fromMZU
 --  , sparseLinearPredictor
 --  , SparseEtaVec
-  , BetaU(..)
-  , scaleBetaU
-  , addBetaU
-  , diffBetaU
+--  , BetaU(..)
+--  , scaleBetaU
+--  , addBetaU
+--  , diffBetaU
   , makeZS
   , ZStarMatrix(smZS)
 --  , zeroZStar
@@ -296,21 +305,55 @@ type PMatrix = SLA.SpMatrix Double -- should this be (SLA.SpMatrix Int) ??
 
 type BetaVec = LA.Vector Double
 type UVec = SLA.SpVector Double
+
+newtype MaybeZeroVec a = MaybeZeroVec { unMaybeZeroVec :: Maybe a } deriving (Show, Functor, Applicative, Monad)
+
+zeroVec :: MaybeZeroVec a
+zeroVec = MaybeZeroVec Nothing
+
+useMaybeZeroVec :: a -> (b -> a) -> MaybeZeroVec b -> a
+useMaybeZeroVec ifZero f = maybe ifZero f . unMaybeZeroVec
+
+type MaybeZeroUVec = MaybeZeroVec UVec
+
+scaleMZU :: Double -> MaybeZeroUVec -> MaybeZeroUVec
+scaleMZU x = useMaybeZeroVec zeroVec (MaybeZeroVec . Just . SLA.scale x)
+
+addMZU :: MaybeZeroUVec -> MaybeZeroUVec -> MaybeZeroUVec
+addMZU mzv1 mzv2 = case (unMaybeZeroVec mzv1, unMaybeZeroVec mzv2) of
+  (Nothing, Nothing) -> zeroVec
+  (Just v1, Nothing) -> mzv1
+  (Nothing, Just v2) -> mzv2
+  (Just v1, Just v2) -> MaybeZeroVec (Just $ v1 SLA.^+^ v2) 
+
+diffMZU :: MaybeZeroUVec -> MaybeZeroUVec -> MaybeZeroUVec
+diffMZU mzv1 mzv2 = case (unMaybeZeroVec mzv1, unMaybeZeroVec mzv2) of
+  (Nothing, Nothing) -> zeroVec
+  (Just _, Nothing) -> mzv1
+  (Nothing, Just _) -> fmap SLA.negateV mzv2
+  (Just v1, Just v2) -> MaybeZeroVec (Just $ v1 SLA.^-^ v2) 
+
+type MaybeZeroBVec = MaybeZeroVec (SLA.SpVector Double)
+
+fromMZU :: (UVec -> SLA.SpVector Double) -> MaybeZeroUVec -> MaybeZeroBVec
+fromMZU = fmap 
+
+
 type MuVec = LA.Vector Double
 type EtaVec = LA.Vector Double
 
-data BetaU = BetaU { bu_vBeta :: LA.Vector Double, bu_svU :: SLA.SpVector Double } deriving (Show)
+--data BetaU = BetaU { bu_vBeta :: BetaVec, bu_svU :: UVec } deriving (Show)
 
-scaleBetaU :: Double -> BetaU -> BetaU
-scaleBetaU x (BetaU b u) = BetaU (LA.scale x b) (SLA.scale x u)
+--scaleBetaU :: Double -> BetaU -> BetaU
+--scaleBetaU x (BetaU b u) = BetaU (LA.scale x b) (SLA.scale x u)
 
-addBetaU :: BetaU -> BetaU -> BetaU
-addBetaU (BetaU bA uA) (BetaU bB uB) = BetaU (LA.add bA bB) (uA SLA.^+^ uB)
+--addBetaU :: BetaU -> BetaU -> BetaU
+--addBetaU (BetaU bA uA) (BetaU bB uB) = BetaU (LA.add bA bB) (uA SLA.^+^ uB)
 
-diffBetaU :: BetaU -> BetaU -> BetaU
-diffBetaU (BetaU bA uA) (BetaU bB uB) = BetaU (bA - bB) (uA SLA.^-^ uB)
+--diffBetaU :: BetaU -> BetaU -> BetaU
+--diffBetaU (BetaU bA uA) (BetaU bB uB) = BetaU (bA - bB) (uA SLA.^-^ uB)
 
-newtype ZStarMatrix = ZStar { smZS :: SLA.SpMatrix Double }
+data ZStarMatrix = ZStar { smZS :: SLA.SpMatrix Double }
 data RandomEffectCalculated = RandomEffectCalculated { recModelMatrix:: RandomEffectModelMatrix
                                                      , recMkLambda :: (CovarianceVec -> LambdaMatrix)
                                                      }
@@ -327,32 +370,30 @@ makeZS reCalc vTh =
 
 --data LinearPredictorComponents = LPComponents FixedPredictors ZStarMatrix BetaU
 
-data LinearPredictor = LP_Computed EtaVec | LP_ComputeFrom BetaU  deriving (Show)
+data LinearPredictor = LP_Computed EtaVec | LP_ComputeFrom BetaVec (MaybeZeroVec UVec)  deriving (Show)
 
 
 denseLinearPredictor
-  :: FixedPredictors -> Maybe ZStarMatrix -> LinearPredictor -> EtaVec
+  :: FixedPredictors -> ZStarMatrix -> LinearPredictor -> EtaVec
 denseLinearPredictor _ _ (LP_Computed x) = x
-denseLinearPredictor mX zStarM (LP_ComputeFrom betaU) =
-  let atZeroU = mX LA.#> (bu_vBeta betaU)
-  in case zStarM of
-    Nothing -> atZeroU
-    Just zStar -> atZeroU + (SD.toDenseVector $ (smZS zStar) SLA.#> bu_svU betaU)
+denseLinearPredictor mX zStar (LP_ComputeFrom vBeta mzvU) =
+  let atZeroU = mX LA.#> (vBeta)
+      addU atZeroU svU = atZeroU + (SD.toDenseVector $ (smZS zStar) SLA.#> svU)
+  in useMaybeZeroVec atZeroU (addU atZeroU) mzvU
 
 
 diffLinearPredictor
   :: FixedPredictors
-  -> Maybe ZStarMatrix
+  -> ZStarMatrix
   -> LinearPredictor
   -> LinearPredictor
   -> LinearPredictor
-diffLinearPredictor mX zStarM (LP_ComputeFrom buX) (LP_ComputeFrom buY) =
-  LP_Computed $ denseLinearPredictor mX zStarM $ LP_ComputeFrom $ diffBetaU buX
-                                                                           buY
-diffLinearPredictor mX zStarM lpX lpY = LP_Computed (vEtaX - vEtaY)
+diffLinearPredictor mX zStar (LP_ComputeFrom betaX mzvUX) (LP_ComputeFrom betaY mzvUY) =
+  LP_Computed $ denseLinearPredictor mX zStar $ LP_ComputeFrom  (betaX - betaY) (diffMZU mzvUX mzvUY) 
+diffLinearPredictor mX zStar lpX lpY = LP_Computed (vEtaX - vEtaY)
  where
-  vEtaX = denseLinearPredictor mX zStarM lpX
-  vEtaY = denseLinearPredictor mX zStarM lpY
+  vEtaX = denseLinearPredictor mX zStar lpX
+  vEtaY = denseLinearPredictor mX zStar lpY
 
 --updateLinearPredictor :: Double -> BetaU -> FixedPredictors -> ZStarMatrix -> LinearPredictor -> LinearPredictor
 --updateLinearPredictor x dBetaU mX zStar lp = go (GLM.scaleBetaU x dBetaU) mX zStar lp where
