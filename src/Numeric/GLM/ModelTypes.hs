@@ -57,6 +57,7 @@ module Numeric.GLM.ModelTypes
   , LinearPredictor(..)
   , denseLinearPredictor
   , diffLinearPredictor
+  , MaybeZeroVec(..)
   , MaybeZeroUVec
   , zeroVec
   , useMaybeZeroVec
@@ -64,7 +65,6 @@ module Numeric.GLM.ModelTypes
   , addMZU
   , diffMZU
   , MaybeZeroBVec
-  , fromMZU
 --  , sparseLinearPredictor
 --  , SparseEtaVec
 --  , BetaU(..)
@@ -334,9 +334,6 @@ diffMZU mzv1 mzv2 = case (unMaybeZeroVec mzv1, unMaybeZeroVec mzv2) of
   (Just v1, Just v2) -> MaybeZeroVec (Just $ v1 SLA.^-^ v2) 
 
 type MaybeZeroBVec = MaybeZeroVec (SLA.SpVector Double)
-
-fromMZU :: (UVec -> SLA.SpVector Double) -> MaybeZeroUVec -> MaybeZeroBVec
-fromMZU = fmap 
 
 
 type MuVec = LA.Vector Double
