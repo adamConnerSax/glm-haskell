@@ -126,7 +126,7 @@ parametricBootstrap
   -> Double -- deviance from solution, may be ignored
   -> Int -- number of times to bootstrap
   -> Bool
-  -> P.Sem r [(GLM.BetaU, VS.Vector Double)] -- beta, u and b
+  -> P.Sem r [(GLM.BetaVec, GLM.MaybeZeroUVec, GLM.MaybeZeroVec (VS.Vector Double))] -- beta, u and b
 parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
   P.wrapPrefix "parametricBootstrap" $ do
     let (fpC, fpF, smP) = cf
@@ -156,15 +156,15 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
             P.logLE P.Diagnostic "Starting..."
             cs                     <- liftIO $ KQ.readQueue factorQueue -- get a factor when available.  Blocks until then
             cf'                    <- cholmodFactor cs
-            (_, _, _, betaU, b, _) <- GLM.minimizeDevianceInner mdv
-                                                                dt
-                                                                newMM
-                                                                reCalc
-                                                                cf'
-                                                                thSol
+            (_, _, _, vBeta, mzvu, mzvb, _) <- GLM.minimizeDevianceInner mdv
+                                               dt
+                                               newMM
+                                               reCalc
+                                               cf'
+                                               thSol
             liftIO $ KQ.writeQueue factorQueue (CS_Computed cf') -- put the factor back
             P.logLE P.Diagnostic "Finished."
-            return (betaU, b)
+            return (vBeta, mzvu, mzvb)
     newObservations <- mapM (const generateOne) $ replicate n ()
 --    let asMat = LA.fromColumns (vMuSol : newObservations)
 --    P.logLE P.Info $ "vMuSol | sims=\n" <> (T.pack $ show asMat)
@@ -194,16 +194,16 @@ bootstrappedConfidence
   -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> VS.Vector Double --vb
-  -> [(GLM.BetaU, VS.Vector Double)] -- bootstrap fits
+  -> [(GLM.BetaVec, VS.Vector Double)] -- bootstrap fits
   -> BootstrapCIType
   -> S.CL Double
   -> P.Sem r (Double, (Double, Double))
-bootstrappedConfidence mm getPredM getLabelM rc ebg fitBetaU fitvb bootstraps ciType cl
+bootstrappedConfidence mm getPredM getLabelM rc ebg fitBeta fitvb bootstraps ciType cl
   = do
-    let predict = GLM.predictFromBetaUB mm getPredM getLabelM rc ebg
-    fitX        <- predict fitBetaU fitvb
+    let predict = GLM.predictFromBetaB mm getPredM getLabelM rc ebg
+    fitX        <- predict fitBeta fitvb
     bootstrapXs <- traverse (uncurry predict) bootstraps
     ci          <- bootstrapCI ciType fitX bootstrapXs cl
     return (fitX, ci)

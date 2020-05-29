@@ -166,18 +166,18 @@ fitted'
   -> (q -> g -> GLM.GroupKey g)
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> LA.Vector Double
   -> q
   -> P.Sem r Double -- the map in effectParametersByGroup and the map in RowClassifier might not match
-fitted' mm getPred getLabel ebg rowClassifier betaU vb row =
+fitted' mm getPred getLabel ebg rowClassifier vBeta vb row =
   fst
     <$> GLM.predict' mm
                      (Just . getPred row)
                      (Just . getLabel row)
                      ebg
                      rowClassifier
-                     betaU
+                     vBeta
                      vb
 
 

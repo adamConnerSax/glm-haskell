@@ -29,7 +29,7 @@ import qualified Knit.Effect.Logger            as P
 
 -- TODO: I should add a likelihood test.  Once I figure out how to do it.
 data ConfidenceType = NaiveCondVarCI (LA.Matrix Double) GLM.ConditionalCovarianceMatrix
-                    | BootstrapCI GLM.BootstrapCIType [(GLM.BetaU, VS.Vector Double)]
+                    | BootstrapCI GLM.BootstrapCIType [(GLM.BetaVec, VS.Vector Double)]
 
 predictWithCI
   :: (GLM.Effects r, GLM.PredictorC b, GLM.GroupC g)
@@ -38,32 +38,32 @@ predictWithCI
   -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> VS.Vector Double --vb
   -> S.CL Double
   -> ConfidenceType
   -> P.Sem r (Double, (Double, Double))
-predictWithCI mm getPredictorM getLabelM rc ebg betaU vb cl (NaiveCondVarCI mBetaCov smCondVar)
+predictWithCI mm getPredictorM getLabelM rc ebg vBeta vb cl (NaiveCondVarCI mBetaCov smCondVar)
   = GLM.predictWithCondVarCI mm
                              getPredictorM
                              getLabelM
                              ebg
                              rc
-                             betaU
+                             vBeta
                              vb
                              cl
                              mBetaCov
                              smCondVar
 
-predictWithCI mm getPredictorM getLabelM rc ebg betaU vb cl (BootstrapCI bootCIType bootBetaUbs)
+predictWithCI mm getPredictorM getLabelM rc ebg vBeta vb cl (BootstrapCI bootCIType bootBetabs)
   = GLM.bootstrappedConfidence mm
                                getPredictorM
                                getLabelM
                                rc
                                ebg
-                               betaU
+                               vBeta
                                vb
-                               bootBetaUbs
+                               bootBetabs
                                bootCIType
                                cl
 

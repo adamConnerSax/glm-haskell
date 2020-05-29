@@ -763,7 +763,7 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       (_, q)       = SLA.dim (GLM.smZS zStar)
       (_, _, smP)  = cf
       vEtaExact    = computeEta0 (linkFunctionType mm) vY
-    vBetaAtZeroU <- betaFrom' mm vEtaExact GLM.zeroVec -- approximate fit with no random effects
+    vBetaAtZeroU <- betaFrom' mm zStar vEtaExact GLM.zeroVec -- approximate fit with no random effects
 --      svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
     let lf = GLM.linkFunction $ linkFunctionType mm
         pdFunction os chol x y =
@@ -1171,34 +1171,42 @@ computeEta0 lft vY =
 -- X'X <*> Beta = X' <*> (eta - Z* <*> u)
 -- Beta = inverse(X'X) <*> X' <*> (eta - Z* <*> u)
 -- and X'X is symmetric positive definite so we solve the above via Cholesky
+
 betaFrom
   :: GLM.MixedModel b g
   -> GLM.ZStarMatrix
   -> GLM.MaybeZeroUVec
   -> GLM.EtaVec
   -> GLM.BetaVec
-betaFrom mm mX zStar svU vEta =
-  let vZSu = SD.toDenseVector $ (GLM.smZS zStar) SLA.#> svU
+betaFrom mm zStar mzvu vEta =
+  let smZS = GLM.smZS zStar
+      (_, q) = SLA.dim smZS
+      vZSu = GLM.useMaybeZeroVec (VS.replicate q 0) (\svU -> SD.toDenseVector $ smZS SLA.#> svU) mzvu
+      mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
       vRhs = LA.tr mX LA.#> (vEta - vZSu)
       xTx = LA.tr mX LA.<> mX      
       cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
 
+
 betaFrom'
   :: GLM.EffectsIO r
   => GLM.MixedModel b g
+  -> GLM.ZStarMatrix -- this is unused and thus a sign that a redesign is in order.
   -> GLM.EtaVec
   -> GLM.MaybeZeroUVec
   -> P.Sem r GLM.BetaVec
-betaFrom' mm vEta mzvu = do
+betaFrom' mm zStar vEta mzvu = do
   let  vM   = VS.map (GLM.derivInv lf) vEta
        vMu = VS.map (GLM.invLink lf) vEta
+       vY = GLM.observations mm
        vW   = GLM.weights mm
        vVSW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
        lf =  GLM.linkFunction $ linkFunctionType mm
-  (_, mV) <- spUV mm BetaOnly vVSW vM
-  (_, vRhsX) <- normalEquationsRHS (NormalEquations GLMM vW vM lf vEta vMu mzvu) 
+  (_, mV) <- spUV mm BetaAtZeroU zStar vVSW vM
+  (_, vRhsX) <- normalEquationsRHS (NormalEquationsGLMM vW vM lf vEta vMu mzvu) Nothing mV vY
   let vTv = (LA.tr mV) LA.<> mV
+      mRxx =  LA.chol $ LA.trustSym vTv
       betaSols = LA.cholSolve mRxx (LA.asColumn vRhsX)
       vBeta = head $ LA.toColumns betaSols
   return vBeta
@@ -1250,12 +1258,14 @@ cholmodCholeskySolutions' cholmodFactor smUtM mV nes mixedModelSpec =
     case smUtM of
       Nothing -> do
         P.logLE P.Diagnostic "CholmodCholeskySolutions' for beta only (at fixed u=0)"
-        let mRxx = LA.chol vTv
+        let mRxx = LA.chol $ LA.trustSym vTv
             betaSols = LA.cholSolve mRxx (LA.asColumn vRhsX)
             vBeta = head $ LA.toColumns betaSols
             q = zCols $ GLM.mmsFitSpecByGroup mixedModelSpec
         return (CholeskySolutions (SLA.eye q) (SLA.zeroSM q p) mRxx, vBeta, GLM.zeroVec)
       Just smUt -> do
+        let (q, _)                    = SLA.dim smUt
+            svRhsZ = GLM.useMaybeZeroVec (SLA.zeroSV q) id mzvRhsZ
         liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt        
         smPRhsZ         <- liftIO
           $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svRhsZ)
@@ -1310,7 +1320,7 @@ cholmodCholeskySolutions' cholmodFactor smUtM mV nes mixedModelSpec =
           <> "; max(beta)="
           <> (T.pack $ show $ VS.maximum vBeta)
         P.logLE P.Diagnostic "Finished."
-        return $ (CholeskySolutions smLth smRzx mRxx, vBeta, MaybeZeroVec (Just svu))
+        return $ (CholeskySolutions smLth smRzx mRxx, vBeta, GLM.MaybeZeroVec (Just svu))
 
 
 

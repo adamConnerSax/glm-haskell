@@ -65,9 +65,9 @@ eitherToSem = either (P.throw . GLM.OtherGLMError) return
 fixedEffectParameters
   :: GLM.PredictorC b
   => GLM.MixedModel b g --GLM.FixedEffects b
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> GLM.FixedEffectParameters b
-fixedEffectParameters mm (GLM.BetaU vBeta _) =
+fixedEffectParameters mm vBeta =
   let means = vBeta
       fe    = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
   in  GLM.FixedEffectParameters fe means
@@ -77,10 +77,10 @@ fixedEffectStatistics
   => GLM.MixedModel b g --GLM.FixedEffects b
   -> Double
   -> GLM.CholeskySolutions
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> GLM.FixedEffectStatistics b
-fixedEffectStatistics mm sigma2 (GLM.CholeskySolutions _ _ mRX) betaU =
-  let fep       = fixedEffectParameters mm betaU
+fixedEffectStatistics mm sigma2 (GLM.CholeskySolutions _ _ mRX) vBeta =
+  let fep       = fixedEffectParameters mm vBeta
       effSigma2 = case GLM.observationsDistribution mm of
         GLM.Normal -> sigma2
         _          -> 1
@@ -162,18 +162,18 @@ effectCovariancesByGroup ebg mm sigma2 vTh = do
         return (group, GLM.GroupEffectCovariances effects cm)
   eitherToSem $ fmap M.fromList $ traverse ecs $ zip groups offsets
 
-predictFromBetaUB
+predictFromBetaB
   :: (GLM.PredictorC b, GLM.GroupC g, GLM.Effects r)
   => GLM.MixedModel b g
   -> (b -> Maybe Double)
   -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.RowClassifier g
   -> GLM.EffectsByGroup g b
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> VS.Vector Double -- b
   -> P.Sem r Double
-predictFromBetaUB mm getPredictorM getLabelM rc ebg betaU vb = do
-  let fep = fixedEffectParameters mm betaU
+predictFromBetaB mm getPredictorM getLabelM rc ebg vBeta vb = do
+  let fep = fixedEffectParameters mm vBeta
   epg <- effectParametersByGroup rc ebg vb
   fst <$> predict mm getPredictorM getLabelM fep epg rc
 
@@ -337,10 +337,10 @@ predict'
   -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> LA.Vector Double -- vb
   -> P.Sem r (Double, Double) -- (prediction, link (prediction))
-predict' mm getPredictorM getLabelM ebg rowClassifier betaU vb = do
+predict' mm getPredictorM getLabelM ebg rowClassifier vBeta vb = do
   let fes      = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
       invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
   vFixedCoeffs  <- fixedEffectsCoefficientVector getPredictorM fes
@@ -351,7 +351,7 @@ predict' mm getPredictorM getLabelM ebg rowClassifier betaU vb = do
 --  P.logLE P.Diagnostic $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
   let svb = SD.toSparseVector vb
       totalEffects =
-        (vFixedCoeffs LA.<.> (GLM.bu_vBeta betaU)) + (svGroupCoeffs SLA.<.> svb)
+        (vFixedCoeffs LA.<.> vBeta) + (svGroupCoeffs SLA.<.> svb)
   return (invLinkF totalEffects, totalEffects)
 
 -- We can compute a very crude CI by **assuming** that the likelihood function is approximately quadratic.
@@ -374,21 +374,22 @@ conditionalCovariances
   -> GLM.CholmodFactor
   -> GLM.RandomEffectCalculated
   -> GLM.CovarianceVec
-  -> GLM.BetaU
+  -> GLM.BetaVec
+  -> GLM.MaybeZeroUVec
   -> P.Sem r ConditionalCovarianceMatrix
-conditionalCovariances mm cf reCalc vTh betaU = do
+conditionalCovariances mm cf reCalc vTh vBeta mzvu = do
   let (cholmodC, cholmodF, _) = cf
       mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
       zStar                   = GLM.makeZS reCalc vTh
       smLambda                = (GLM.recMkLambda reCalc) vTh
       smLambdat               = SLA.transpose smLambda
-      vEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom betaU)
+      vEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom vBeta mzvu)
       lf        = GLM.linkFunction $ GLM.linkFunctionType mm
       vMu       = VS.map (GLM.invLink lf) vEta
       vM        = VS.map (GLM.derivInv lf) vEta
       vW        = GLM.weights mm
       vVSW = GLM.varianceScaledWeights (GLM.observationsDistribution mm) vW vMu
-  (smU, _) <- GLM.spUV mm zStar vVSW vM 
+  (msmU, _) <- GLM.spUV mm GLM.SolveBetaU zStar vVSW vM 
   let lf                      = GLM.linkFunction $ GLM.linkFunctionType mm
       sigma2                  = GLM.devScale (GLM.observationsDistribution mm)
                                              (GLM.weights mm)
@@ -396,6 +397,9 @@ conditionalCovariances mm cf reCalc vTh betaU = do
                                              (VS.map (GLM.invLink lf) vEta)
   -- reFactorize because the factor gets trashed when we extract L at the end of chomod
       cfs = CH.FactorizeAtAPlusBetaI 1
+  smU <- case msmU of
+    Nothing -> P.throw $ GLM.OtherGLMError "(Maybe U) matrix is nothing in Predict.conditionalCovariances!"
+    Just x -> return x
   liftIO $ CH.spMatrixFactorizeP cholmodC
                                  cholmodF
                                  cfs
@@ -414,13 +418,13 @@ predictWithCondVarCI
   -> (g -> Maybe (GLM.GroupKey g))
   -> GLM.EffectsByGroup g b
   -> GLM.RowClassifier g
-  -> GLM.BetaU
+  -> GLM.BetaVec
   -> LA.Vector Double -- vb
   -> S.CL Double
   -> LA.Matrix Double -- Cov_Beta  
   -> ConditionalCovarianceMatrix --Cov_U
   -> P.Sem r (Double, (Double, Double)) -- (prediction, lower, upper)
-predictWithCondVarCI mm getPredictorM getLabelM ebg rowClassifier betaU vb cl mCovBeta smCondVar
+predictWithCondVarCI mm getPredictorM getLabelM ebg rowClassifier vBeta vb cl mCovBeta smCondVar
   = do
     let fes      = GLM.rmsFixedEffects $ GLM.regressionModelSpec mm
         invLinkF = GLM.invLink $ GLM.linkFunction $ GLM.linkFunctionType mm
@@ -433,7 +437,7 @@ predictWithCondVarCI mm getPredictorM getLabelM ebg rowClassifier betaU vb cl mC
   --  P.logLE P.Diagnostic $ "vGroup=" <> (T.pack $ show svGroupCoeffs)
     let svb = SD.toSparseVector vb
         totalEffects =
-          (vFixedCoeffs LA.<.> (GLM.bu_vBeta betaU))
+          (vFixedCoeffs LA.<.> vBeta)
             + (svGroupCoeffs SLA.<.> svb)
         varianceTE =
           ((mCovBeta LA.#> vFixedCoeffs) LA.<.> vFixedCoeffs)
