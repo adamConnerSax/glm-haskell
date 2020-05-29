@@ -503,7 +503,7 @@ profiledDeviance verbosity cf dt mm reCalc os vThM =
         zStar = GLM.makeZS reCalc vTh
 
     P.logLE P.Diagnostic "Starting. Calling getCholeskySolutions."
-    (cs@(CholeskySolutions smLth smRzx mRxx), vBeta, mzvU) <- getCholeskySolutions
+    (cs@(CholeskySolutions smLth smRzx mRxx), vBeta, mzvu) <- getCholeskySolutions
       cf
       mm
       zStar
@@ -521,7 +521,7 @@ profiledDeviance verbosity cf dt mm reCalc os vThM =
       putStrLn "Rxx"
       LA.disp 2 mRxx
     let osFinal = if (GLM.generalized mm) then Optim_GLMM_Final else Optim_LMM
-        vEta    = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom vBeta mzvU)
+        vEta    = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom vBeta mzvu)
     (pd, rTheta2) <- profiledDeviance' verbosity
                                        dt
                                        mm
@@ -529,8 +529,8 @@ profiledDeviance verbosity cf dt mm reCalc os vThM =
                                        vThM
                                        osFinal
                                        cs
-                                       vEta
-                                       vBeta
+                                       vEta                                       
+                                       mzvu
     let dof = case dt of
           ML   -> realToFrac n
           REML -> realToFrac (n - p)
@@ -548,8 +548,8 @@ profiledDeviance verbosity cf dt mm reCalc os vThM =
       putStrLn $ "2 * logDet=" ++ show (2 * logDet)
     when (verbosity == PDVAll || verbosity == PDVSimple) $ liftIO $ do
       putStrLn $ "pd(th=" ++ (show vTh) ++ ") = " ++ show pd
-    let mzvB = fmap (\svU -> lambda SLA.#> svU) mzvU
-    return (pd, sigma2, vBeta, mzvU, mzvB, cs)
+    let mzvb = fmap (\svU -> lambda SLA.#> svU) mzvu
+    return (pd, sigma2, vBeta, mzvb, mzvb, cs)
 
 
 profiledDeviance'
@@ -562,15 +562,15 @@ profiledDeviance'
   -> OptimizationStage
   -> CholeskySolutions
   -> GLM.EtaVec
-  -> GLM.UVec
+  -> GLM.MaybeZeroUVec
   -> P.Sem r (Double, Double) -- profiled deviance, deviance + u'u 
-profiledDeviance' pdv dt mm zStar vThM os chol vEta svU =
+profiledDeviance' pdv dt mm zStar vThM os chol vEta mzvu =
   P.wrapPrefix "profiledDeviance'" $ do
     P.logLE P.Diagnostic
       $  "Starting ("
       <> (T.pack $ show os)
       <> " @ theta="
-      <> (T.pack $ show vTh)
+      <> (T.pack $ show vThM)
       <> ")..."
 --    P.logLE P.Diagnostic $ "vEta=" <> (T.pack $ show vEta)
 --    P.logLE P.Diagnostic $ "svU=" <> (T.pack $ show svU)
@@ -584,10 +584,10 @@ profiledDeviance' pdv dt mm zStar vThM os chol vEta svU =
           ( GLM.glmmsObservationsDistribution glmmSpec
           , GLM.glmmsWeights glmmSpec
           )
-      logLth = maybe 0 (const $ logDetTriangularSM (lTheta chol)) zStarM
+      logLth = logDetTriangularSM (lTheta chol) 
 --      smZS   = GLM.makeZS reCalc vTh
       vMu = LA.cmap (GLM.invLink $ GLM.linkFunction (linkFunctionType mm)) vEta
-      uDotu = svU SLA.<.> svU
+      uDotu = GLM.useMaybeZeroVec 0 (\svU -> svU SLA.<.> svU) mzvu
     P.logLE P.Diagnostic
       $  "logLth="
       <> (T.pack $ show logLth)
@@ -651,7 +651,7 @@ data CholeskySolutions = CholeskySolutions { lTheta :: GLM.LMatrix
                                            , rXX :: GLM.RxxMatrix
                                            } deriving (Show)
 
-data NormalEquations = NormalEquationsLMM | NormalEquationsGLMM GLM.WMatrix (VS.Vector Double) GLM.LinkFunction GLM.EtaVec GLM.MuVec GLM.UVec
+data NormalEquations = NormalEquationsLMM | NormalEquationsGLMM GLM.WMatrix (VS.Vector Double) GLM.LinkFunction GLM.EtaVec GLM.MuVec GLM.MaybeZeroUVec
 
 normalEquationsRHS
   :: GLM.EffectsIO r
@@ -667,7 +667,7 @@ normalEquationsRHS NormalEquationsLMM smUtM mVt vY =
 --    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svRhsZ, vRhsX))
     return (mzvRhsZ, vRhsX) --(SLA.transpose smU SLA.#> SD.toSparseVector vY, LA.tr mV LA.#> vY)
 
-normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu svU) smUtM mVt vY =
+normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu mzvu) smUtM mVt vY =
   P.wrapPrefix "normalEquationsRHS" $ do
     P.logLE P.Diagnostic "Starting..."
 
@@ -681,7 +681,8 @@ normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu svU) smUtM mVt vY =
         msvUt_r0 = GLM.MaybeZeroVec $ fmap (\smUt -> smUt SLA.#> (SD.toSparseVector vR0)) smUtM
         vVt_r0 = mVt LA.#> vR0
     let msvUX   = GLM.MaybeZeroVec $ fmap (\smUt -> smUt SLA.#> (SD.toSparseVector vWtYMinusMu)) smUtM
-        msvRhsZ = fmap (\svUX -> svUX SLA.^-^ svU) msvUX
+        g v = GLM.useMaybeZeroVec v (\x -> v SLA.^-^ x)
+        msvRhsZ = fmap (\svUX -> g svUX mzvu) msvUX
         vRhsX  = mVt LA.#> vWtYMinusMu
 --    P.logLE P.Diagnostic $ "r0=" <> (T.pack $ show vR0)
 --    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svUt_r0, vVt_r0))
@@ -753,18 +754,21 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       <> (T.pack $ show vThM)
       <> ")..."
     let
-      mX          = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-      vY          = GLM.rmsObservations $ GLM.regressionModelSpec mm
-      vW          = GLM.weights mm
-      od          = GLM.glmmsObservationsDistribution glmmSpec
+      mX           = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
+      vY           = GLM.rmsObservations $ GLM.regressionModelSpec mm
+      vW           = GLM.weights mm
+      od           = GLM.glmmsObservationsDistribution glmmSpec
       GLM.GLMMControls ul maxHalvings pirlsCC = GLM.glmmsControls glmmSpec
-      n           = LA.size vY
-      (_, q)      = SLA.dim (GLM.smZS zStar)
-      (_, _, smP) = cf
-      vEtaExact   = computeEta0 (linkFunctionType mm) vY
-      vBeta0'     = betaFrom mX zStar svU0 vEtaExact -- approximate fit with no random effects
-      svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
-    (vEta0, vBeta0, svU0, _) <- pirls cf mm BetaAtZeroU  (GLM.pirlsMaxSteps pirlsCC) (1.0 / 0.0) vEtaExact vBeta0' svU0
+      n            = LA.size vY
+      (_, q)       = SLA.dim (GLM.smZS zStar)
+      (_, _, smP)  = cf
+      vEtaExact    = computeEta0 (linkFunctionType mm) vY
+    vBetaAtZeroU <- betaFrom' mm vEtaExact GLM.zeroVec -- approximate fit with no random effects
+--      svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
+    let lf = GLM.linkFunction $ linkFunctionType mm
+        pdFunction os chol x y =
+          fst <$> profiledDeviance' PDVNone ML mm zStar vThM os chol x y
+    (vEta0, vBeta0, mzvu0, _) <- pirls cf mm BetaAtZeroU zStar (GLM.pirlsMaxSteps pirlsCC) (1.0 / 0.0) (pdFunction os) vEtaExact vBetaAtZeroU GLM.zeroVec
 {-
       vEta0       = GLM.denseLinearPredictor
         mX
@@ -777,9 +781,9 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       <>  "; max(vEtaExact)="
       <> (T.pack $ show $ VS.maximum vEtaExact)
       <> "\nmin(svU0)="
-      <> (T.pack $ show $ VB.minimum $ SLA.toVector svU0)
+      <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) mzvu0)
       <> "; max(svU0)="
-      <> (T.pack $ show $ VB.maximum $ SLA.toVector svU0)
+      <> (T.pack $ show $ fmap (VB.maximum . SLA.toVector) mzvu0)
       <> "\nmin(vBeta0)="
       <> (T.pack $ show $ VS.minimum vBeta0)
       <> "; max(vBeta0)="
@@ -791,31 +795,29 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
 
 
 
-    let
-      lf = GLM.linkFunction $ linkFunctionType mm
-      pdFunction os chol x y =
-        fst <$> profiledDeviance' PDVNone ML mm zStar vTh os chol x y
+    
       --incS betaU dBetaU x = addBetaU betaU (scaleBetaU x dBetaU)
     
-    (vEta', vBeta', svU', chol) <- pirls
+    (vEta', vBeta', mzvu', chol) <- pirls
                                    cf
                                    mm
-                                   (SolveBetaU zStar)
+                                   SolveBetaU
+                                   zStar
                                    (GLM.pirlsMaxSteps pirlsCC) 
                                    (1.0 / 0.0) -- Infinity :: Double
                                    (pdFunction os)
                                    vEta0
                                    vBeta0
-                                   svU0
+                                   mzvu0
 --    let vBeta' = betaFrom mX zStar svU' vEta'
     P.logLE P.Diagnostic "Finished."
-    return (chol, vBeta', svU')
+    return (chol, vBeta', mzvu')
 
 
-data PIRLS_Type = SolveBetaU GLM.ZStarMatrix | BetaAtZeroU
+data PIRLS_Type = SolveBetaU | BetaAtZeroU
 
 printPIRLSType :: PIRLS_Type -> T.Text
-printPIRLSType (SolveBetaU _) = "Solving For Beta and u"
+printPIRLSType SolveBetaU = "Solving For Beta and u"
 printPIRLSType BetaAtZeroU = "Solving For Beta at fixed u=0"
 
 
@@ -823,11 +825,12 @@ pirls ::  GLM.EffectsIO r
       => CholmodFactor
       -> GLM.MixedModel b g
       -> PIRLS_Type --GLM.ZStarMatrix -- ^ if this is nothing, we are only solving for beta
+      -> GLM.ZStarMatrix
       -> Int
       -> Double 
       -> (CholeskySolutions
           -> GLM.EtaVec
-          -> GLM.UVec
+          -> GLM.MaybeZeroUVec
           -> P.Sem r Double
          )
       -> GLM.EtaVec
@@ -835,9 +838,9 @@ pirls ::  GLM.EffectsIO r
       -> GLM.MaybeZeroUVec
       -> P.Sem r (GLM.EtaVec, GLM.BetaVec, GLM.MaybeZeroUVec,  CholeskySolutions)
 
-pirls _ mm@(GLM.LinearMixedModel _) _ _ _ _ _ _ _ = P.throw $ GLM.OtherGLMError "Called pirls with a non-generalized mixed model."
+pirls _ mm@(GLM.LinearMixedModel _) _ _ _ _ _ _ _ _ = P.throw $ GLM.OtherGLMError "Called pirls with a non-generalized mixed model."
 
-pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType n pdCurrent pdF vEta vBeta msvU =
+pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType zStar n pdCurrent pdF vEta vBeta mzvu =
   P.wrapPrefix ("PIRLS (" <> printPIRLSType pirlsType <> ")") $ do
     P.logLE P.Diagnostic
       $  "iterateUntilConverged (n="
@@ -851,20 +854,21 @@ pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType n pdCurrent pdF
         <> (T.pack $ show $ VS.maximum vEta)
     P.logLE P.Diagnostic
       $ "min(svU)="
-      <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) svU) 
+      <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) mzvu) 
       <> "; max(svU)="
-      <> (T.pack $ show $ fmap (VB.maximum . SLA.toVector) svU)
+      <> (T.pack $ show $ fmap (VB.maximum . SLA.toVector) mzvu)
       <> ")"
     let GLM.GLMMControls ul maxHalvings pirlsCC = GLM.glmmsControls glmmSpec
-    (pd', vEta', vBeta', msvU', dBetaU, chol, smU) <- updateEtaBetaU
+    (pd', vEta', vBeta', mzvu', chol, smU) <- updateEtaBetaU
                                                       cf
                                                       mm
                                                       maxHalvings
                                                       pirlsType
+                                                      zStar
                                                       pdF
                                                       vEta
                                                       vBeta
-                                                      msvU
+                                                      mzvu
 
     cc <- case GLM.pirlsConvergenceType pirlsCC of
       GLM.PCT_Eta -> do
@@ -876,11 +880,11 @@ pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType n pdCurrent pdF
     case (cc < (GLM.pirlsTolerance pirlsCC), n) of
       (True, _) -> do
         P.logLE P.Diagnostic "Converged."
-        return (vEta', vBeta', msvU', chol)
+        return (vEta', vBeta', mzvu', chol)
       (False, 1) -> P.throw $ GLM.OtherGLMError "Too many iterations in getCholeskySolutions."
       (False, m) -> do
         P.logLE P.Diagnostic $ "Not converged.  cc=" <> (T.pack $ show cc)
-        pirls cf mm pirlsType (m - 1) pd' pdF vEta' vBeta' msvU'
+        pirls cf mm pirlsType zStar (m - 1) pd' pdF vEta' vBeta' mzvu'
 
 updateEtaBetaU
   :: GLM.EffectsIO r
@@ -888,6 +892,7 @@ updateEtaBetaU
   -> GLM.MixedModel b g
   -> Int
   -> PIRLS_Type
+  -> GLM.ZStarMatrix
   -> (  CholeskySolutions
      -> GLM.EtaVec
      -> GLM.MaybeZeroUVec
@@ -903,9 +908,9 @@ updateEtaBetaU
        , GLM.BetaVec
        , GLM.MaybeZeroUVec
        , CholeskySolutions
-       , SLA.SpMatrix Double
+       , Maybe GLM.UMatrix
        )
-updateEtaBetaU cf mm maxHalvings pirlsType pdFunction vEta vBeta mzvu =
+updateEtaBetaU cf mm maxHalvings pirlsType zStar pdFunction vEta vBeta mzvu =
   P.wrapPrefix "updateEtaBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..." ---(Eta=" <> (T.pack $ show vEta) <> ")"
     let mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
@@ -916,7 +921,7 @@ updateEtaBetaU cf mm maxHalvings pirlsType pdFunction vEta vBeta mzvu =
       <> (T.pack $ show $ VS.minimum vBeta) 
       <> "; max(vBeta)="
       <> (T.pack $ show $ VS.maximum vBeta)
-    (vdBeta, mzvdu, chol, smU, mV)             <- compute_dBetaU cf mm pirlsType vEta mzvu
+    (vdBeta, mzvdu, chol, msmU, mV)             <- compute_dBetaU cf mm pirlsType zStar vEta mzvu
 --    let dBetaU = GLM.diffBetaU betaU betaU0
     logOnGLMException $ "updateEtaBetaU: "
       <> "beta0="
@@ -934,9 +939,10 @@ updateEtaBetaU cf mm maxHalvings pirlsType pdFunction vEta vBeta mzvu =
     (pdFinal, vEta', vdBeta', mzvdu') <- refine_dBetaU mm
                                          maxHalvings
                                          pirlsType
+                                         zStar
                                          (pdFunction chol)
                                          vEta
-                                         svU
+                                         mzvu
                                          vdBeta
                                          mzvdu
     let vBeta' = vBeta + vdBeta'
@@ -947,7 +953,7 @@ updateEtaBetaU cf mm maxHalvings pirlsType pdFunction vEta vBeta mzvu =
       <> "; ||dBeta||^2="
       <> (T.pack $ show $ (vdBeta' LA.<.> vdBeta'))
       <> ")." --- (Eta=" <> (T.pack $ show vEta') <> ")"
-    return (pdFinal, vEta', vBeta', mzvu', chol, smU)
+    return (pdFinal, vEta', vBeta', mzvu', chol, msmU)
 
 data ShrinkPD = Shrunk Double GLM.EtaVec GLM.BetaVec GLM.MaybeZeroUVec  | NotShrunk Double deriving (Show)
 
@@ -956,13 +962,14 @@ refine_dBetaU
   => GLM.MixedModel b g
   -> Int -- max step halvings
   -> PIRLS_Type
+  -> GLM.ZStarMatrix
   -> (GLM.EtaVec -> GLM.MaybeZeroUVec -> P.Sem r Double) -- profiled deviance
   -> GLM.EtaVec
   -> GLM.MaybeZeroUVec
   -> GLM.BetaVec
   -> GLM.MaybeZeroUVec
   -> P.Sem r (Double, GLM.EtaVec, GLM.BetaVec, GLM.MaybeZeroUVec)
-refine_dBetaU mm maxHalvings pirlsType pdF vEta mzvu vdBeta mzvdu =
+refine_dBetaU mm maxHalvings pirlsType zStar pdF vEta mzvu vdBeta mzvdu =
   P.wrapPrefix "refineDBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..."
     {-        
@@ -980,7 +987,8 @@ refine_dBetaU mm maxHalvings pirlsType pdF vEta mzvu vdBeta mzvdu =
 --        smZS = GLM.smZS zStar
     pd0 <- pdF vEta mzvu --vBeta svU
     let
-      vdEta = GLM.denseLinearPredictor mX pirlsType (GLM.LP_ComputeFrom vdBeta mzvdu)
+      
+      vdEta = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom vdBeta mzvdu)
       checkOne x = do
         let mzvdu' = fmap (SLA.scale x) mzvdu
             mzvu'  = mzvu `GLM.addMZU` mzvdu'
@@ -1027,20 +1035,21 @@ spUV
   :: GLM.EffectsIO r
   => GLM.MixedModel b g
   -> PIRLS_Type
+  -> GLM.ZStarMatrix
   -> GLM.WMatrix
   -> VS.Vector Double
   -> P.Sem r (Maybe GLM.UMatrix, GLM.VMatrix)
-spUV mm@(GLM.LinearMixedModel _) pirlsType _ _ = P.wrapPrefix "spUV" $ do
+spUV mm@(GLM.LinearMixedModel _) pirlsType zStar _ _ = P.wrapPrefix "spUV" $ do
   let mX = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
-  return (GLM.smZS zStar, mX)
+  return (Just $ GLM.smZS zStar, mX)
 
-spUV mm@(GLM.GeneralizedLinearMixedModel _) pirlsType vVSW vM = P.wrapPrefix "spUV" $ do
+spUV mm@(GLM.GeneralizedLinearMixedModel _) pirlsType zStar vVSW vM = P.wrapPrefix "spUV" $ do
   let mX    = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
       vWUV  = VS.zipWith (\m vsw -> sqrt vsw * m) vM vVSW -- glmer: sqrtWrkWt ?  
       smWUV = SLA.mkDiagonal (VS.length vWUV) $ VS.toList vWUV
       mV    = (LA.diag vWUV) LA.<> mX
       msmU  = case pirlsType of
-        SolveBetaU zStar -> Just $ smWUV SLA.## (GLM.smZS zStar)
+        SolveBetaU -> Just $ smWUV SLA.## (GLM.smZS zStar)
         BetaAtZeroU -> Nothing
   P.logLE P.Diagnostic $ "min(vWUV)=" <> (T.pack $ show $ VS.minimum vWUV ) <> "; max(vWUV)=" <> (T.pack $ show $ VS.maximum vWUV )
   return (msmU, mV)
@@ -1065,12 +1074,13 @@ compute_dBetaU
   => CholmodFactor
   -> GLM.MixedModel b g
   -> PIRLS_Type
+  -> GLM.ZStarMatrix
   -> GLM.EtaVec
   -> GLM.MaybeZeroUVec
   -> P.Sem
        r
-       (GLM.BetaVec, GLM.MaybeZeroUVec, CholeskySolutions, SLA.SpMatrix Double, GLM.VMatrix)
-compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) pirlsType vEta msvU
+       (GLM.BetaVec, GLM.MaybeZeroUVec, CholeskySolutions, Maybe GLM.UMatrix, GLM.VMatrix)
+compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) pirlsType zStar vEta mzvu
   = P.wrapPrefix "compute_dBetaU" $ do
     P.logLE P.Diagnostic "Starting..."
     let mX   = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
@@ -1083,23 +1093,23 @@ compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) pirlsType vEta msvU
     P.logLE P.Diagnostic $ "min(vM)=" <> (T.pack $ show $ VS.minimum vM) <> "; max(vM)=" <> (T.pack $ show $ VS.maximum vM)    
     P.logLE P.Diagnostic $ "min(vVSW)=" <> (T.pack $ show $ VS.minimum vVSW) <> "; max(vVSW)=" <> (T.pack $ show $ VS.maximum vVSW)
     P.logLE P.Diagnostic "Computing U and V"
-    (msmU, mV) <- spUV mm pirlsType vVSW vM
+    (msmU, mV) <- spUV mm pirlsType zStar vVSW vM
 --    P.logLE P.Diagnostic $ "mVtV=" <> (T.pack $ show $ LA.tr mV LA.<> mV)
-    let neqs = NormalEquationsGLMM vVSW vM lf vEta vMu svU
+    let neqs = NormalEquationsGLMM vVSW vM lf vEta vMu mzvu
     (chol, vdBeta, mzvdu) <- cholmodCholeskySolutions' cf
-                             (fmap SLA.transpose smU)
+                             (fmap SLA.transpose msmU)
                              mV
                              neqs
                              (GLM.mixedModelSpec mm)
-    P.logLE P.Diagnostic $ "min(dBeta)=" <> (T.pack $ show $ VS.minimum vdbeta) <> "; max(dBeta)=" <> (T.pack $ show $ VS.maximum vdBeta)
+    P.logLE P.Diagnostic $ "min(dBeta)=" <> (T.pack $ show $ VS.minimum vdBeta) <> "; max(dBeta)=" <> (T.pack $ show $ VS.maximum vdBeta)
     P.logLE P.Diagnostic $ "min(du)="
       <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) mzvdu)
       <> "; max(dU)="
       <> (T.pack $ show $ fmap (VB.maximum . SLA.toVector) mzvdu)    
     P.logLE P.Diagnostic "Finished."
-    return (vdBeta, mzvdu, chol, smU, mV)
+    return (vdBeta, mzvdu, chol, msmU, mV)
 
-compute_dBetaU _ (GLM.LinearMixedModel _) _ _ _ = P.throw
+compute_dBetaU _ (GLM.LinearMixedModel _) _ _ _ _ = P.throw
   $ GLM.OtherGLMError "Called compute_dBetaU given an LMM instead of a GLMM."
 {-
 pirlsConvergence
@@ -1162,17 +1172,36 @@ computeEta0 lft vY =
 -- Beta = inverse(X'X) <*> X' <*> (eta - Z* <*> u)
 -- and X'X is symmetric positive definite so we solve the above via Cholesky
 betaFrom
-  :: GLM.FixedPredictors
+  :: GLM.MixedModel b g
   -> GLM.ZStarMatrix
-  -> GLM.UVec
+  -> GLM.MaybeZeroUVec
   -> GLM.EtaVec
   -> GLM.BetaVec
-betaFrom mX zStar svU vEta =
+betaFrom mm mX zStar svU vEta =
   let vZSu = SD.toDenseVector $ (GLM.smZS zStar) SLA.#> svU
       vRhs = LA.tr mX LA.#> (vEta - vZSu)
       xTx = LA.tr mX LA.<> mX      
       cXtX = LA.chol $ LA.trustSym $ xTx --LA.tr mX LA.<> mX
   in  head $ LA.toColumns $ LA.cholSolve cXtX (LA.asColumn vRhs)
+
+betaFrom'
+  :: GLM.EffectsIO r
+  => GLM.MixedModel b g
+  -> GLM.EtaVec
+  -> GLM.MaybeZeroUVec
+  -> P.Sem r GLM.BetaVec
+betaFrom' mm vEta mzvu = do
+  let  vM   = VS.map (GLM.derivInv lf) vEta
+       vMu = VS.map (GLM.invLink lf) vEta
+       vW   = GLM.weights mm
+       vVSW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
+       lf =  GLM.linkFunction $ linkFunctionType mm
+  (_, mV) <- spUV mm BetaOnly vVSW vM
+  (_, vRhsX) <- normalEquationsRHS (NormalEquations GLMM vW vM lf vEta vMu mzvu) 
+  let vTv = (LA.tr mV) LA.<> mV
+      betaSols = LA.cholSolve mRxx (LA.asColumn vRhsX)
+      vBeta = head $ LA.toColumns betaSols
+  return vBeta
 
 {-
 glmBeta
