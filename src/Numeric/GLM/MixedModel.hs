@@ -764,11 +764,19 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       (_, _, smP)  = cf
       vEtaExact    = computeEta0 (linkFunctionType mm) vY
     vBetaAtZeroU <- betaFrom' mm zStar vEtaExact GLM.zeroVec -- approximate fit with no random effects
+    let vEtaAtZeroU = GLM.denseLinearPredictor mX zStar (GLM.LP_ComputeFrom vBetaAtZeroU GLM.zeroVec)
+    P.logLE P.Diagnostic
+      $ "\nmin(vBeta|u=0)="
+      <> (T.pack $ show $ VS.minimum vBetaAtZeroU)
+      <> "; max(vBeta|u=0)="
+      <> (T.pack $ show $ VS.maximum vBetaAtZeroU)
 --      svU0        = SD.toSparseVector $ LA.fromList $ L.replicate q 0 -- FIXME (maybe 0 is right here??)
     let lf = GLM.linkFunction $ linkFunctionType mm
         pdFunction os chol x y =
           fst <$> profiledDeviance' PDVNone ML mm zStar vThM os chol x y
-    (vEta0, vBeta0, mzvu0, _) <- pirls cf mm BetaAtZeroU zStar (GLM.pirlsMaxSteps pirlsCC) (1.0 / 0.0) (pdFunction os) vEtaExact vBetaAtZeroU GLM.zeroVec
+        pdFunctionU0 os chol x y =
+          fst <$> profiledDeviance' PDVNone ML mm zStar Nothing os chol x y  
+    (vEta0, vBeta0, mzvu0, _) <- pirls cf mm BetaAtZeroU zStar (GLM.pirlsMaxSteps pirlsCC) (1.0 / 0.0) (pdFunctionU0 os) vEtaAtZeroU vBetaAtZeroU GLM.zeroVec
 {-
       vEta0       = GLM.denseLinearPredictor
         mX
@@ -792,10 +800,6 @@ getCholeskySolutions cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) zStar os v
       <> (T.pack $ show $ VS.minimum vEta0)
       <> "; max(vEta0)="
       <> (T.pack $ show $ VS.maximum vEta0)
-
-
-
-    
       --incS betaU dBetaU x = addBetaU betaU (scaleBetaU x dBetaU)
     
     (vEta', vBeta', mzvu', chol) <- pirls
@@ -820,7 +824,7 @@ printPIRLSType :: PIRLS_Type -> T.Text
 printPIRLSType SolveBetaU = "Solving For Beta and u"
 printPIRLSType BetaAtZeroU = "Solving For Beta at fixed u=0"
 
-
+-- don't wrap-prefix this becuase it calls itself and the messages get...long.
 pirls ::  GLM.EffectsIO r
       => CholmodFactor
       -> GLM.MixedModel b g
@@ -840,51 +844,52 @@ pirls ::  GLM.EffectsIO r
 
 pirls _ mm@(GLM.LinearMixedModel _) _ _ _ _ _ _ _ _ = P.throw $ GLM.OtherGLMError "Called pirls with a non-generalized mixed model."
 
-pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType zStar n pdCurrent pdF vEta vBeta mzvu =
-  P.wrapPrefix ("PIRLS (" <> printPIRLSType pirlsType <> ")") $ do
-    P.logLE P.Diagnostic
-      $  "iterateUntilConverged (n="
-        <> (T.pack $ show n)
-        <> "; pd="
-        <> (T.pack $ show pdCurrent)
-    P.logLE P.Diagnostic
-      $ "min(vEta)="
-        <> (T.pack $ show $ VS.minimum vEta) 
-        <> "; max(vEta)="
-        <> (T.pack $ show $ VS.maximum vEta)
-    P.logLE P.Diagnostic
-      $ "min(svU)="
-      <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) mzvu) 
-      <> "; max(svU)="
-      <> (T.pack $ show $ fmap (VB.maximum . SLA.toVector) mzvu)
-      <> ")"
-    let GLM.GLMMControls ul maxHalvings pirlsCC = GLM.glmmsControls glmmSpec
-    (pd', vEta', vBeta', mzvu', chol, smU) <- updateEtaBetaU
-                                                      cf
-                                                      mm
-                                                      maxHalvings
-                                                      pirlsType
-                                                      zStar
-                                                      pdF
-                                                      vEta
-                                                      vBeta
-                                                      mzvu
+pirls cf mm@(GLM.GeneralizedLinearMixedModel glmmSpec) pirlsType zStar n pdCurrent pdF vEta vBeta mzvu = do
+  P.logLE P.Diagnostic
+    $  "(" <> printPIRLSType pirlsType
+    <> ") iterateUntilConverged (n="
+    <> (T.pack $ show n)
+    <> "; pd="
+    <> (T.pack $ show pdCurrent)
+    <> ")"
+  P.logLE P.Diagnostic
+    $ "min(vEta)="
+    <> (T.pack $ show $ VS.minimum vEta) 
+    <> "; max(vEta)="
+    <> (T.pack $ show $ VS.maximum vEta)
+  P.logLE P.Diagnostic
+    $ "min(svU)="
+    <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) mzvu) 
+    <> "; max(svU)="
+    <> (T.pack $ show $ fmap (VB.maximum . SLA.toVector) mzvu)
+    <> ")"
+  let GLM.GLMMControls ul maxHalvings pirlsCC = GLM.glmmsControls glmmSpec
+  (pd', vEta', vBeta', mzvu', chol, smU) <- updateEtaBetaU
+                                            cf
+                                            mm
+                                            maxHalvings
+                                            pirlsType
+                                            zStar
+                                            pdF
+                                            vEta
+                                            vBeta
+                                            mzvu
+  
+  cc <- case GLM.pirlsConvergenceType pirlsCC of
+    GLM.PCT_Eta -> do
+      let dEta = (vEta - vEta') -- GLM.diffLinearPredictor mX zStar lp lp'
+      return $ (LA.norm_2 dEta) / (LA.norm_2 vEta')
+    GLM.PCT_Deviance   -> return $ abs $ (pdCurrent - pd') / pd'
+    GLM.PCT_Orthogonal -> P.throw $ GLM.OtherGLMError "ConvergeOrthognal not implemented yet."
 
-    cc <- case GLM.pirlsConvergenceType pirlsCC of
-      GLM.PCT_Eta -> do
-        let dEta = (vEta - vEta') -- GLM.diffLinearPredictor mX zStar lp lp'
-        return $ (LA.norm_2 dEta) / (LA.norm_2 vEta')
-      GLM.PCT_Deviance   -> return $ abs $ (pdCurrent - pd') / pd'
-      GLM.PCT_Orthogonal -> P.throw $ GLM.OtherGLMError "ConvergeOrthognal not implemented yet."
-
-    case (cc < (GLM.pirlsTolerance pirlsCC), n) of
-      (True, _) -> do
-        P.logLE P.Diagnostic "Converged."
-        return (vEta', vBeta', mzvu', chol)
-      (False, 1) -> P.throw $ GLM.OtherGLMError "Too many iterations in getCholeskySolutions."
-      (False, m) -> do
-        P.logLE P.Diagnostic $ "Not converged.  cc=" <> (T.pack $ show cc)
-        pirls cf mm pirlsType zStar (m - 1) pd' pdF vEta' vBeta' mzvu'
+  case (cc < (GLM.pirlsTolerance pirlsCC), n) of
+    (True, _) -> do
+      P.logLE P.Diagnostic "Converged."
+      return (vEta', vBeta', mzvu', chol)
+    (False, 1) -> P.throw $ GLM.OtherGLMError "Too many iterations in getCholeskySolutions."
+    (False, m) -> do
+      P.logLE P.Diagnostic $ "Not converged.  cc=" <> (T.pack $ show cc)
+      pirls cf mm pirlsType zStar (m - 1) pd' pdF vEta' vBeta' mzvu'
 
 updateEtaBetaU
   :: GLM.EffectsIO r
@@ -1204,8 +1209,9 @@ betaFrom' mm zStar vEta mzvu = do
        vVSW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu
        lf =  GLM.linkFunction $ linkFunctionType mm
   (_, mV) <- spUV mm BetaAtZeroU zStar vVSW vM
-  (_, vRhsX) <- normalEquationsRHS (NormalEquationsGLMM vW vM lf vEta vMu mzvu) Nothing mV vY
-  let vTv = (LA.tr mV) LA.<> mV
+  let mVt = LA.tr mV
+  (_, vRhsX) <- normalEquationsRHS (NormalEquationsGLMM vW vM lf vEta vMu mzvu) Nothing mVt vY
+  let vTv = mVt LA.<> mV
       mRxx =  LA.chol $ LA.trustSym vTv
       betaSols = LA.cholSolve mRxx (LA.asColumn vRhsX)
       vBeta = head $ LA.toColumns betaSols

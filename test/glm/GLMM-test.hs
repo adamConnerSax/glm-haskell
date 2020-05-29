@@ -46,7 +46,7 @@ import           System.IO                      ( hSetBuffering
                                                 , stdout
                                                 , BufferMode(..)
                                                 )
-verbose = True
+verbose = True 
 
 runFIO =
   let runGLMEffects = if verbose then runEffectsVerboseIO else runEffectsIO
@@ -229,18 +229,19 @@ main = do
     liftIO $ putStrLn $ "GLMM"
     let mm = asGLMM lmms
     checkProblem mm randomEffectCalc
-    ((th2_GLMM, pd2_GLMM, sigma2_GLMM, vBetaU2_GLMM, vb2_GLMM, cs_GLMM), vMuSol, cf) <-
+    ((th2_GLMM, pd2_GLMM, sigma2_GLMM, vBeta2_GLMM, mzvu2_GLMM, mzvb2_GLMM, cs_GLMM), vMuSol, cf) <-
       minimizeDeviance mdVerbosity ML mm randomEffectCalc th0
     liftIO $ do
       putStrLn $ "theta=" ++ show th2_GLMM
       putStrLn $ "deviance=" ++ show pd2_GLMM
-      putStrLn $ "beta=" ++ show (GLM.bu_vBeta vBetaU2_GLMM)
-      putStrLn $ "u=" ++ show (GLM.bu_svU vBetaU2_GLMM)
-      putStrLn $ "b=" ++ show vb2_GLMM
-    GLM.report mm smZ (GLM.bu_vBeta vBetaU2_GLMM) (SD.toSparseVector vb2_GLMM)
-    let fep_GLMM = GLM.fixedEffectParameters mm vBetaU2_GLMM
+      putStrLn $ "beta=" ++ show vBeta2_GLMM
+      putStrLn $ "u=" ++ show mzvu2_GLMM
+      putStrLn $ "b=" ++ show mzvb2_GLMM
+    vb2_GLMM <- GLM.useMaybeZeroVec (P.throw $ GLM.OtherGLMError "Zero b vector returned in GLMM-test") return mzvb2_GLMM
+    GLM.report mm smZ vBeta2_GLMM (SD.toSparseVector vb2_GLMM)
+    let fep_GLMM = GLM.fixedEffectParameters mm vBeta2_GLMM
         fes_GLMM =
-          GLM.fixedEffectStatistics mm sigma2_GLMM cs_GLMM vBetaU2_GLMM
+          GLM.fixedEffectStatistics mm sigma2_GLMM cs_GLMM vBeta2_GLMM
     liftIO $ putStrLn $ "FixedEffectStatistics: " ++ show fes_GLMM
     epg <- GLM.effectParametersByGroup rowClassifier effectsByGroup vb2_GLMM
     liftIO $ putStrLn $ "EffectParametersByGroup: " ++ show epg
@@ -268,7 +269,8 @@ main = do
                                             cf
                                             randomEffectCalc
                                             th2_GLMM
-                                            vBetaU2_GLMM
+                                            vBeta2_GLMM
+                                            mzvu2_GLMM
     let GLM.FixedEffectStatistics _ mBetaCov = fes_GLMM
     let f r = do
           let obs = getObservation r
@@ -296,10 +298,10 @@ main = do
             (Just . groupLabels r)
             rowClassifier
             effectsByGroup
-            vBetaU2_GLMM
+            vBeta2_GLMM
             vb2_GLMM
             (S.mkCL 0.95)
-            (GLM.BootstrapCI GLM.BCI_Accelerated bootstraps)
+            (GLM.BootstrapCI GLM.BCI_Accelerated (fmap (GLM.simplifyBootstraps q) bootstraps))
 
 
           predictCVCI <- GLM.predictWithCI
@@ -308,7 +310,7 @@ main = do
             (Just . groupLabels r)
             rowClassifier
             effectsByGroup
-            vBetaU2_GLMM
+            vBeta2_GLMM
             vb2_GLMM
             (S.mkCL 0.95)
             (GLM.NaiveCondVarCI mBetaCov smCondVar)

@@ -185,6 +185,10 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
       <> " succeeded."
     return res
 
+simplifyBootstraps :: Int -> (GLM.BetaVec, GLM.MaybeZeroUVec, GLM.MaybeZeroVec (VS.Vector Double)) -> (GLM.BetaVec, VS.Vector Double)
+simplifyBootstraps n (vb, _, mzvb) = (vb, GLM.useMaybeZeroVec (VS.replicate n 0) id mzvb)
+
+
 data BootstrapCIType = BCI_Student | BCI_Percentile | BCI_Pivot | BCI_ExpandedPercentile | BCI_Accelerated
 
 bootstrappedConfidence
