@@ -68,9 +68,9 @@ void cholmodx_dense_free_void(cholmod_common* c, cholmod_dense* a)
 size_t  cholmodx_sparse_get_nrow(cholmod_sparse* a) {return a->nrow;}
 size_t  cholmodx_sparse_get_ncol(cholmod_sparse* a) {return a->ncol;}
 size_t  cholmodx_sparse_get_nzmax(cholmod_sparse* a) {return a->nzmax;}
-size_t  cholmodx_sparse_get_p(cholmod_sparse* a) {return a->p; }
-size_t  cholmodx_sparse_get_i(cholmod_sparse* a) {return a->i; }
-size_t  cholmodx_sparse_get_nz(cholmod_sparse* a) {return a->nz; }
+size_t*  cholmodx_sparse_get_p(cholmod_sparse* a) {return a->p; }
+size_t*  cholmodx_sparse_get_i(cholmod_sparse* a) {return a->i; }
+size_t*  cholmodx_sparse_get_nz(cholmod_sparse* a) {return a->nz; }
 double* cholmodx_sparse_get_x(cholmod_sparse* a) {return a->x;}
 
 /*
