@@ -156,6 +156,51 @@ spMatrixToTriplet fpc ms smX = do
   CH.tripletSetNNZ triplet (fromIntegral $ length smTriplets)
   return triplet
 
+{-
+-- | make an SpMatrix into a CHOLMOD sparse
+-- this thing should, but doesn't, free itself via ForeignPtr.
+allocSparse :: CSize -> CSize -> CSize -> Bool -> Bool ->  CH.SType -> CH.XType -> ForeignPtr CH.Common -> IO (CH.Matrix CH.Sparse)
+allocSparse nRow nCol nzMax isSorted isPacked sType xType cfp =
+  withForeignPtr cfp $ \cp -> do
+    let intSorted = if isSorted then 1 else 0
+        intPacked = if isPacked then 1 else 0
+    cholSparse <- cholmod_allocate_sparse nRow nCol nzMax intSorted intPacked sType xType cp
+    sfp <- newForeignPtrEnv CH.sparse_free_ptr cp cholSparse
+    return $ CH.Matrix sfp
+
+sparseGetP :: Matrix CH.Sparse -> IO (V.IOVector CInt)
+sparseGetP = 
+sparseGetI :: Matrix CH.Sparse -> IO (V.IOVector CInt)
+sparseDoubleGetX :: Matrix CH.Sparse -> IO (V.IOVector CDouble)
+
+spMatrixToSparse :: RealFrac a => ForeignPtr CH.Common -> MatrixSymmetry -> SLA.SpMatrix a -> IO (CH.Matrix CH.Sparse)
+spMatrixToSparse fpc ms smX = do
+  let (nrows, ncols, nnz) = getDims ms smX
+  sparse <- allocSparse nrows ncols nnz True False (hcholmodSType ms) CH.xtReal fpc
+  
+  
+  triplet <- CH.allocTriplet
+             nrows
+             ncols
+             nnz
+             (hcholmodSType ms)
+             CH.xtReal
+             fpc
+  rowIs <- CH.tripletGetRowIndices triplet
+  colIs <- CH.tripletGetColIndices triplet
+  vals  <- CH.tripletGetX triplet
+  let symmetryFilter (r,c,_) = case ms of
+        UnSymmetric -> True
+        SquareSymmetricUpper -> (c >= r)
+        SquareSymmetricLower -> (c <= r)
+      smTriplets = filter symmetryFilter $ SLA.toListSM smX
+  writev rowIs $ fmap (\(rI,_,_) -> fromIntegral rI) smTriplets
+  writev colIs $ fmap (\(_,cI,_) -> fromIntegral cI) smTriplets
+  writev vals $ fmap (\(_,_,x) -> realToFrac x) smTriplets
+  CH.tripletSetNNZ triplet (fromIntegral $ length smTriplets)
+  return triplet
+-}
+
 -- | Compute fill-reducing permutation, etc. for a symmetric positive-definite matrix
 -- This only requires that the lower triangle be filled in
 spMatrixAnalyzeWP :: ForeignPtr CH.Common -- ^ CHOLMOD environment
@@ -412,6 +457,24 @@ foreign import ccall unsafe "cholmod_extras.h cholmod_factor_permutation"
 foreign import ccall unsafe "cholmod_extras.h cholmod_set_final_ll"
    setFinalLLL :: Int -> Ptr CH.Common -> IO () 
 
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_nrow" 
+   sparse_get_nrow :: Ptr CH.Sparse -> IO CSize
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_ncol" 
+   sparse_get_ncol :: Ptr CH.Sparse -> IO CSize
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_nzmax" 
+   sparse_get_nzmax :: Ptr CH.Sparse -> IO CSize
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_p" 
+   sparse_get_p :: Ptr CH.Sparse -> IO (Ptr CInt)
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_i" 
+   sparse_get_i :: Ptr CH.Sparse -> IO (Ptr CSize)
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_double_get_x" 
+   sparse_double_get_x :: Ptr CH.Sparse -> IO (Ptr CDouble)
+
 foreign import ccall unsafe "cholmod.h cholmod_factor_to_sparse"
   factorToSparseL :: Ptr CH.Factor -> Ptr CH.Common -> IO (Ptr CH.Sparse) 
 
@@ -445,7 +508,8 @@ foreign import ccall unsafe "cholmod.h cholmod_factorize_p"
 foreign import ccall unsafe "cholmod.h cholmod_copy_factor"
   copyFactorL :: Ptr CH.Factor -> Ptr CH.Common -> IO (Ptr CH.Factor)
 
-
+foreign import ccall unsafe "cholmod.h cholmod_allocate_sparse"
+  cholmod_allocate_sparse :: CSize -> CSize -> CSize -> Int -> Int -> CH.SType -> CH.XType -> Ptr CH.Common -> IO (Ptr CH.Sparse) 
 
 {-
 -- | the factor L

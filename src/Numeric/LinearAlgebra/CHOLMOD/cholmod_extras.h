@@ -42,13 +42,18 @@ size_t  cholmodx_dense_get_ncol(cholmod_dense* a);
 size_t  cholmodx_dense_get_nzmax(cholmod_dense* a);
 double* cholmodx_dense_get_x(cholmod_dense* a);
 int     cholmodx_dense_free_xface(cholmod_dense* a, cholmod_common* c);
+*/
 
 size_t  cholmodx_sparse_get_nrow(cholmod_sparse* a);
 size_t  cholmodx_sparse_get_ncol(cholmod_sparse* a);
 size_t  cholmodx_sparse_get_nzmax(cholmod_sparse* a);
-double* cholmodx_sparse_get_x(cholmod_sparse* a);
+size_t * cholmodx_sparse_get_p(cholmod_sparse* a);
+size_t * cholmodx_sparse_get_i(cholmod_sparse* a);
+size_t * cholmodx_sparse_get_nz(cholmod_sparse* a);
+double* cholmodx_sparse_double_get_x(cholmod_sparse* a);
 int     cholmodx_sparse_free_xface(cholmod_sparse* a, cholmod_common* c);
 
+/*
 int     cholmodx_factor_free_xface(cholmod_factor* a, cholmod_common* c);
 void    cholmodx_factor_free_void(cholmod_common* c, cholmod_factor* a);
 */

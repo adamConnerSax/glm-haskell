@@ -1247,9 +1247,6 @@ cholmodCholeskySolutions' cholmodFactor smUtM mV nes mixedModelSpec =
         (_, p)                    = LA.size mV
 --        (q, _)                    = SLA.dim smUt
     -- Cholesky factorize to get L_theta *and* update factor for solving with it
-    P.logLE P.Diagnostic "factorizing..."
-    -- TODO: Cholmod has built in support for factorizing XtX + a * I.  Use it.
-    let cfs = CH.FactorizeAtAPlusBetaI 1
     
     (mzvRhsZ, vRhsX) <- normalEquationsRHS nes smUtM (LA.tr mV) vY
 {-    
@@ -1270,22 +1267,31 @@ cholmodCholeskySolutions' cholmodFactor smUtM mV nes mixedModelSpec =
             q = zCols $ GLM.mmsFitSpecByGroup mixedModelSpec
         return (CholeskySolutions (SLA.eye q) (SLA.zeroSM q p) mRxx, vBeta, GLM.zeroVec)
       Just smUt -> do
+        P.logLE P.Diagnostic "CholmodCholeskySolutions' for beta and u"
         let (q, _)                    = SLA.dim smUt
             svRhsZ = GLM.useMaybeZeroVec (SLA.zeroSV q) id mzvRhsZ
-        liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt        
+        P.logLE P.Diagnostic "factorizing..."
+        -- TODO: Cholmod has built in support for factorizing XtX + a * I.  Use it.
+        let cfs = CH.FactorizeAtAPlusBetaI 1
+        liftIO $ CH.spMatrixFactorizeP cholmodC cholmodF cfs CH.UnSymmetric smUt
+        P.logLE P.Diagnostic "U'r0 -> PU'r0"
         smPRhsZ         <- liftIO
           $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P (SD.svColumnToSM svRhsZ)
   --    P.logLE P.Diagnostic "After smPRhsZ..."
+        P.logLE P.Diagnostic "Solving for cu"
         svC <-
           SLA.toSV
           <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPRhsZ)
         let smUtV = smUt SLA.#~# (SD.toSparseMatrix mV)
             --    P.logLE P.Diagnostic "Calling solveSparse for smPUtV."
+        P.logLE P.Diagnostic "U'V -> PU'V"
         smPUtV <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_P smUtV -- PU'V
 --    P.logLE P.Diagnostic "Calling solveSparse for smRzx."
+        P.logLE P.Diagnostic "Solving for Rzx"
         smRzx  <- liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_LD smPUtV -- NB: If decomp was LL' then D is I but if it was LDL', we need D...
     -- compute Rxx
     -- NB: c is defined as Lu + Rzx(Beta) which allows solving the normal equations in pieces
+        P.logLE P.Diagnostic "Solving for Beta, RzxBeta, cu - RzxBeta"
         let vTvMinusRzxTRzx =
               ((LA.tr mV) LA.<> mV)  - (SD.toDenseMatrix $ smRzx SLA.#^# smRzx)
 --    liftIO $ putStrLn $ "mV=" ++ show mV
@@ -1304,17 +1310,21 @@ cholmodCholeskySolutions' cholmodFactor smUtM mV nes mixedModelSpec =
             vBeta           = head $ LA.toColumns $ betaSols
             svBeta          = SD.toSparseVector vBeta
             svRzxBeta       = smRzx SLA.#> svBeta
-            smCMinusRzxBeta = SD.svColumnToSM (svC SLA.^-^ svRzxBeta)
+            svCMinusRzxBeta = svC SLA.^-^ svRzxBeta
+            smCMinusRzxBeta = SD.svColumnToSM svCMinusRzxBeta
+        P.logLE P.Diagnostic $ "Finished. nnz(cu - RzxBeta) =" <> (T.pack . show $ SLA.nzSV svCMinusRzxBeta)    
 --    P.logLE P.Diagnostic "Calling solveSparse for smPu."
+        P.logLE P.Diagnostic "Solving for Pu"
         smPu <- liftIO
           $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_DLt smCMinusRzxBeta
 --    P.logLE P.Diagnostic "Calling solveSparse for svu."
+        P.logLE P.Diagnostic "Solving for u"
         svu <-
           SLA.toSV
           <$> (liftIO $ CH.solveSparse cholmodC cholmodF CH.CHOLMOD_Pt $ smPu)
     -- NB: This has to happen after the solves because it unfactors the factor...
     -- NB: It does *not* undo the analysis
---    P.logLE P.Diagnostic "Calling choleskyFactorSM for smLth."
+        P.logLE P.Diagnostic "Calling choleskyFactorSM for smLth."
         smLth <- liftIO $ CH.choleskyFactorSM cholmodF cholmodC
         P.logLE P.Diagnostic
           $  "min(u)="
