@@ -2,7 +2,7 @@
 {-# LANGUAGE EmptyDataDecls           #-}
 {-# LANGUAGE ForeignFunctionInterface #-} 
 {-# LANGUAGE OverloadedStrings #-}
-
+{-# LANGUAGE ScopedTypeVariables #-}
 module Numeric.LinearAlgebra.CHOLMOD.CholmodExtras
   (
     MatrixSymmetry (..)
@@ -156,7 +156,7 @@ spMatrixToTriplet fpc ms smX = do
   CH.tripletSetNNZ triplet (fromIntegral $ length smTriplets)
   return triplet
 
-{-
+
 -- | make an SpMatrix into a CHOLMOD sparse
 -- this thing should, but doesn't, free itself via ForeignPtr.
 allocSparse :: CSize -> CSize -> CSize -> Bool -> Bool ->  CH.SType -> CH.XType -> ForeignPtr CH.Common -> IO (CH.Matrix CH.Sparse)
@@ -168,38 +168,70 @@ allocSparse nRow nCol nzMax isSorted isPacked sType xType cfp =
     sfp <- newForeignPtrEnv CH.sparse_free_ptr cp cholSparse
     return $ CH.Matrix sfp
 
-sparseGetP :: Matrix CH.Sparse -> IO (V.IOVector CInt)
-sparseGetP = 
-sparseGetI :: Matrix CH.Sparse -> IO (V.IOVector CInt)
-sparseDoubleGetX :: Matrix CH.Sparse -> IO (V.IOVector CDouble)
+-- p [0..ncol]
+{-
+sparseGetP :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CInt)
+sparseGetP csm = do
+  withForeignPtr (CH.fPtr csm) $ \sm -> do
+    nCol <- CH.triplet_get_ncol sm
+    pp <- triplet_get_p sm
+    pFPtr <- newForeignPtr_ pp
+    return $ MVS.unsafeFromForeignPtr0 pFPtr (fromIntegral (nCol + 1))
 
-spMatrixToSparse :: RealFrac a => ForeignPtr CH.Common -> MatrixSymmetry -> SLA.SpMatrix a -> IO (CH.Matrix CH.Sparse)
-spMatrixToSparse fpc ms smX = do
+sparseGetI :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CInt)
+sparseGetI csm = do
+  withForeignPtr (CH.fPtr csm) $ \sm -> do
+    nzMax <- triplet_get_nzMax sm
+    ip <- triplet_get_i sm
+    iFPtr <- newForeignPtr_ pp
+    return $ MVS.unsafeFromForeignPtr0 iFPtr (fromIntegral nzMax)
+
+sparseGetNZ :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CInt)
+sparseGetNZ csm = do
+  withForeignPtr (CH.fPtr csm) $ \sm -> do
+    nCol <- triplet_get_ncol sm
+    nzp <- triplet_get_nz sm
+    nzFPtr <- newForeignPtr_ pp
+    return $ MVS.unsafeFromForeignPtr0 nzFPtr (fromIntegral nCol)
+
+sparseDoubleGetX :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CDouble)
+sparseDoubleGetX csm = do
+  withForeignPtr (CH.fPtr csm) $ \sm -> do
+    nzMax <- triplet_get_nzMax sm
+    xp <- triplet_get_x sm
+    xFPtr <- newForeignPtr_ xp
+    return $ MVS.unsafeFromForeignPtr0 xFPtr (fromIntegral nzMax)    
+-}
+spMatrixRealToSparse :: forall a.(Storable a, RealFrac a) => ForeignPtr CH.Common -> MatrixSymmetry -> SLA.SpMatrix a -> IO (CH.Matrix CH.Sparse)
+spMatrixRealToSparse fpc ms smX = do
   let (nrows, ncols, nnz) = getDims ms smX
+      makeMV :: Storable b => Int -> Ptr b -> IO (MVS.IOVector b)
+      makeMV n x = fmap (\fpx -> MVS.unsafeFromForeignPtr0 fpx n) $ newForeignPtr_ x
+        
   sparse <- allocSparse nrows ncols nnz True False (hcholmodSType ms) CH.xtReal fpc
-  
-  
-  triplet <- CH.allocTriplet
-             nrows
-             ncols
-             nnz
-             (hcholmodSType ms)
-             CH.xtReal
-             fpc
-  rowIs <- CH.tripletGetRowIndices triplet
-  colIs <- CH.tripletGetColIndices triplet
-  vals  <- CH.tripletGetX triplet
+  withForeignPtr (CH.fPtr sparse) $ \sm -> do
+    p <- sparse_get_p sm >>= makeMV (fromIntegral $ ncols + 1)
+    i <- sparse_get_i sm >>= makeMV (fromIntegral nnz)
+    nz <- sparse_get_nz sm >>= makeMV (fromIntegral ncols)
+    x <- sparse_double_get_x sm >>= makeMV (fromIntegral nnz)
+    let processTriplet :: Int -> Int -> a -> IO (Int, Int) -> IO (Int, Int)
+        processTriplet r c val mCur  = do
+          (curCol, curIndex) <- mCur
+          when (c /= curCol) $ MVS.write p curCol (fromIntegral curIndex)
+          MVS.write i curIndex (fromIntegral r)
+          MVS.write x curIndex (realToFrac val)
+          return (c, curIndex + 1)
+
+{-    
   let symmetryFilter (r,c,_) = case ms of
         UnSymmetric -> True
         SquareSymmetricUpper -> (c >= r)
         SquareSymmetricLower -> (c <= r)
-      smTriplets = filter symmetryFilter $ SLA.toListSM smX
-  writev rowIs $ fmap (\(rI,_,_) -> fromIntegral rI) smTriplets
-  writev colIs $ fmap (\(_,cI,_) -> fromIntegral cI) smTriplets
-  writev vals $ fmap (\(_,_,x) -> realToFrac x) smTriplets
-  CH.tripletSetNNZ triplet (fromIntegral $ length smTriplets)
-  return triplet
--}
+      filteredSM = SLA.ifilterSM symmetryFilter smX
+-}      
+    _ <- SLA.ifoldlSM processTriplet (return (0, 0)) smX
+    return sparse
+
 
 -- | Compute fill-reducing permutation, etc. for a symmetric positive-definite matrix
 -- This only requires that the lower triangle be filled in
@@ -471,6 +503,10 @@ foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_p"
 
 foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_i" 
    sparse_get_i :: Ptr CH.Sparse -> IO (Ptr CSize)
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_nz" 
+   sparse_get_nz :: Ptr CH.Sparse -> IO (Ptr CSize)
+
 
 foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_double_get_x" 
    sparse_double_get_x :: Ptr CH.Sparse -> IO (Ptr CDouble)
