@@ -71,9 +71,9 @@ size_t  cholmodx_sparse_get_ncol(cholmod_sparse* a) {return a->ncol;}
 size_t  cholmodx_sparse_get_nzmax(cholmod_sparse* a) {return a->nzmax;}
 double* cholmodx_sparse_get_x(cholmod_sparse* a) {return a->x;}
 */
-size_t*  cholmodx_sparse_get_p(cholmod_sparse* a) {return a->p; }
-size_t*  cholmodx_sparse_get_i(cholmod_sparse* a) {return a->i; }
-size_t*  cholmodx_sparse_get_nz(cholmod_sparse* a) {return a->nz; }
+int*  cholmodx_sparse_get_p(cholmod_sparse* a) {return a->p; }
+int*  cholmodx_sparse_get_i(cholmod_sparse* a) {return a->i; }
+int*  cholmodx_sparse_get_nz(cholmod_sparse* a) {return a->nz; }
 
 
 /*
