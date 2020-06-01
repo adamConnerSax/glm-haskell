@@ -105,21 +105,21 @@ solveSparse :: ForeignPtr CH.Common -- ^ CHOLMOD environment
             -> SLA.SpMatrix Double -- ^ RHS
             -> IO (SLA.SpMatrix Double) -- ^ solutions
 solveSparse fpc fpf ss smB = do
-  mTripletB <- spMatrixToTriplet fpc UnSymmetric smB
+--  mTripletB <- spMatrixToTriplet fpc UnSymmetric smB
 --  when debugSolve $ printTriplet (CH.fPtr mTripletB) "solveSparse input triplet" fpc
-  mSparseB' <- CH.tripletToSparse mTripletB fpc
-  when debugSolve $ printSparse (CH.fPtr mSparseB') "solveSparse input sparse, triplet" fpc
---  mSparseB <- spMatrixRealToSparse fpc UnSymmetric smB
---  when debugSolve $ printSparse (CH.fPtr mSparseB) "solveSparse input sparse, direct" fpc
+--  mSparseB' <- CH.tripletToSparse mTripletB fpc
+--  when debugSolve $ printSparse (CH.fPtr mSparseB') "solveSparse input sparse, triplet" fpc
+  mSparseB <- spMatrixRealToSparse fpc UnSymmetric smB
+  when debugSolve $ printSparse (CH.fPtr mSparseB) "solveSparse input sparse, direct" fpc
   withForeignPtr fpc $ \pc -> do
     withForeignPtr fpf $ \pf -> do
-      withForeignPtr (CH.fPtr mSparseB') $ \pSparseB -> do
+      withForeignPtr (CH.fPtr mSparseB) $ \pSparseB -> do
         pSparseX <- sparseSolveL (cholmodSystem ss) pf pSparseB pc
---        when debugSolve $ printSparse' pSparseX "solveSparse output sparse" fpc
+        when debugSolve $ printSparse' pSparseX "solveSparse output sparse" fpc
         pTripletX <- sparseToTripletL pSparseX pc
---        when debugSolve $ printTriplet' pTripletX "solveSparse output triplet" fpc
+        when debugSolve $ printTriplet' pTripletX "solveSparse output triplet" fpc
         smX <- tripletToSpMatrix pTripletX
---        when debugSolve $ SLA.prd smX
+        when debugSolve $ SLA.prd smX
 --        CH.sparse_free pSparseB pc
 --        withForeignPtr (CH.fPtr mTripletB) $ \pt -> CH.triplet_free pt pc       
         CH.triplet_free pTripletX pc
@@ -273,12 +273,12 @@ spMatrixAnalyzeWP :: ForeignPtr CH.Common -- ^ CHOLMOD environment
                 -> SLA.SpMatrix Double -- ^ matrix to analyze
                 -> IO (ForeignPtr CH.Factor, SLA.SpMatrix Double) -- ^ analysis and fill-reducing permutation
 spMatrixAnalyzeWP fpc ms smX = do
-  triplet <- spMatrixToTriplet fpc ms smX
-  when debug $ printTriplet (CH.fPtr triplet) "spMatrixAnalyzeWP" fpc
-  sparse <- CH.tripletToSparse triplet fpc
-  when debug $ printSparse (CH.fPtr sparse) "spMatrixAnalyzeWP, from triplet" fpc
---  sparse <- spMatrixRealToSparse fpc ms smX
-  when debug $ printSparse (CH.fPtr sparse) "spMatrixAnalyzeWP" fpc
+--  triplet <- spMatrixToTriplet fpc ms smX
+--  printTriplet (CH.fPtr triplet) "spMatrixAnalyzeWP" fpc
+--  sparse <- CH.tripletToSparse triplet fpc
+--  printSparse (CH.fPtr sparse) "spMatrixAnalyzeWP, from triplet" fpc
+  sparse <- spMatrixRealToSparse fpc ms smX
+--  printSparse (CH.fPtr sparse) "spMatrixAnalyzeWP, direct" fpc
   f <- CH.analyze sparse fpc
   when debug $ printFactor f "spMatrixAnalyze" fpc
   permSM <- factorPermutationSM f
@@ -342,12 +342,12 @@ spMatrixFactorizeP :: ForeignPtr CH.Common -- ^ CHOLMOD environment
                    -> SLA.SpMatrix Double -- ^ matrix to decompose
                    -> IO () -- ^ The factor in ForeignPtr Factor will be updated :(
 spMatrixFactorizeP fpc fpf cfs ms smX = do
-  triplet <- spMatrixToTriplet fpc ms smX
-  when debug $ printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
-  sparse <- CH.tripletToSparse triplet fpc
-  sparse' <- spMatrixRealToSparse fpc ms smX
-  printSparse (CH.fPtr sparse) "spMatrixFactorize, via triplet" fpc
-  printSparse (CH.fPtr sparse') "spMatrixFactorize, via direct" fpc
+--  triplet <- spMatrixToTriplet fpc ms smX
+--  when debug $ printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
+--  sparse <- CH.tripletToSparse triplet fpc
+--  printSparse (CH.fPtr sparse) "spMatrixFactorize, via triplet" fpc
+  sparse <- spMatrixRealToSparse fpc ms smX
+--  printSparse (CH.fPtr sparse) "spMatrixFactorize, via direct" fpc
   case cfs of
     FactorizeA -> CH.factorize sparse fpf fpc
     FactorizeAtAPlusBetaI x -> do
@@ -357,9 +357,9 @@ spMatrixFactorizeP fpc fpf cfs ms smX = do
         alloca $ \pbeta -> do
           pokeArray pbeta beta
           factorize_p pm pbeta nullPtr 0 fpf fpc
-  withForeignPtr fpc $ \pc -> do
-    withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc
-    withForeignPtr (CH.fPtr sparse) $ \ps -> CH.sparse_free ps pc
+--  withForeignPtr fpc $ \pc -> do
+--    withForeignPtr (CH.fPtr triplet) $ \pt -> CH.triplet_free pt pc
+--    withForeignPtr (CH.fPtr sparse) $ \ps -> CH.sparse_free ps pc
   return ()
 
 
@@ -451,7 +451,16 @@ tripletToSpMatrix pTriplet = do
 
 -- TODO: sparseToSpMatrix
 sparseToSpMatrix :: Ptr CH.Sparse -> IO (SLA.SpMatrix Double)
-sparseToSpMatrix = undefined
+sparseToSpMatrix pSparse = do
+  nRows <- CH.sparse_get_nrow pSparse
+  nCols <- CH.sparse_get_ncol pSparse
+  nZmax <- CH.sparse_get_nzmax pSparse
+  pV <- sparse_get_p pSparse >>= flip VS.unsafeFromForeignPtr0 (fromIntegral $ nCols + 1)
+  iV <- sparse_get_i pSparse >>= flip VS.unsafeFromForeignPtr0 (fromIntegral nZMax)
+  xV <- CH.sparse_get_x pSparse >>= flip VS.unsafeFromForeignPtr0 (fromIntegral nZMax)
+  sorted <- (/= 0) <$> sparse_get_sorted pSparse
+  packed <- (/= 0) <$> sparse_get_packed pSparse
+  nzV <- sparse_get_nz pSparse >>=
 
 printCommon :: T.Text -> ForeignPtr CH.Common -> IO ()
 printCommon t fpc = withForeignPtr fpc $ \fp -> do
