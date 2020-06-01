@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 874384efc5ef3f0f67b3be205c60ef49cdbcb9a945b54053498a7d6c021089ff
+-- hash: 0a19c25740f9bb6a887aa89b5597a391f26a2b419ab1523d07a1876e588fcad5
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -70,6 +70,7 @@ library
     , base >=4.7 && <5
     , colonnade >=1.2.0 && <1.3
     , containers >=0.5.0.0 && <0.7
+    , deepseq >=1.4.0 && <1.5
     , exceptions >=0.10.0 && <0.11
     , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
@@ -124,6 +125,7 @@ test-suite CHOLMOD-test
     , base >=4.7 && <5
     , colonnade >=1.2.0 && <1.3
     , containers >=0.5.0.0 && <0.7
+    , deepseq >=1.4.0 && <1.5
     , exceptions >=0.10.0 && <0.11
     , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
@@ -167,6 +169,7 @@ test-suite GLMM-test
     , base >=4.7 && <5
     , colonnade >=1.2.0 && <1.3
     , containers >=0.5.0.0 && <0.7
+    , deepseq >=1.4.0 && <1.5
     , exceptions >=0.10.0 && <0.11
     , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5
@@ -213,6 +216,7 @@ test-suite LMM-test
     , base >=4.7 && <5
     , colonnade >=1.2.0 && <1.3
     , containers >=0.5.0.0 && <0.7
+    , deepseq >=1.4.0 && <1.5
     , exceptions >=0.10.0 && <0.11
     , extra >=1.6.17 && <1.7
     , foldl >=1.4.0 && <=1.5

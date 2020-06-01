@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP                      #-}
 {-# LANGUAGE EmptyDataDecls           #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ForeignFunctionInterface #-} 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -48,9 +49,10 @@ import Foreign.C.String
 --import Foreign.Storable (peek)
 --import Foreign.Marshal.Alloc (alloca)
 import System.IO.Unsafe (unsafePerformIO)
-
+import qualified Control.DeepSeq as DS
 
 import           Control.Monad (when)
+import qualified Control.Foldl as FL
 import           Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 
@@ -65,6 +67,9 @@ import           Numeric.LinearAlgebra.CHOLMOD.CholmodXFace  (allocCommon, start
 
 import qualified Data.Vector.Storable.Mutable as MVS
 import qualified Data.Vector.Storable as VS
+import qualified Data.Vector as VB
+
+import GHC.Generics (Generic)
 
 data MatrixSymmetry = UnSymmetric | SquareSymmetricUpper | SquareSymmetricLower
 
@@ -116,15 +121,17 @@ solveSparse fpc fpf ss smB = do
       withForeignPtr (CH.fPtr mSparseB) $ \pSparseB -> do
         pSparseX <- sparseSolveL (cholmodSystem ss) pf pSparseB pc
         when debugSolve $ printSparse' pSparseX "solveSparse output sparse" fpc
-        pTripletX <- sparseToTripletL pSparseX pc
-        when debugSolve $ printTriplet' pTripletX "solveSparse output triplet" fpc
-        smX <- tripletToSpMatrix pTripletX
-        when debugSolve $ SLA.prd smX
+--        pTripletX <- sparseToTripletL pSparseX pc
+--        when debugSolve $ printTriplet' pTripletX "solveSparse output triplet" fpc
+--        smX <- tripletToSpMatrix pTripletX
+--        SLA.prd smX
+        smX' <- sparseDoubleToSpMatrix pSparseX
+--        SLA.prd smX'
 --        CH.sparse_free pSparseB pc
 --        withForeignPtr (CH.fPtr mTripletB) $ \pt -> CH.triplet_free pt pc       
-        CH.triplet_free pTripletX pc
+--        CH.triplet_free pTripletX pc
         CH.sparse_free pSparseX pc
-        return smX
+        return smX'
         
 getDims :: MatrixSymmetry ->  SLA.SpMatrix a -> (CSize, CSize, CSize)
 getDims ms smX =
@@ -162,43 +169,6 @@ spMatrixToTriplet fpc ms smX = do
   return triplet
 
 
-
-
-{-
-
-sparseGetP :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CInt)
-sparseGetP csm = do
-  withForeignPtr (CH.fPtr csm) $ \sm -> do
-    nCol <- CH.triplet_get_ncol sm
-    pp <- triplet_get_p sm
-    pFPtr <- newForeignPtr_ pp
-    return $ MVS.unsafeFromForeignPtr0 pFPtr (fromIntegral (nCol + 1))
-
-sparseGetI :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CInt)
-sparseGetI csm = do
-  withForeignPtr (CH.fPtr csm) $ \sm -> do
-    nzMax <- triplet_get_nzMax sm
-    ip <- triplet_get_i sm
-    iFPtr <- newForeignPtr_ pp
-    return $ MVS.unsafeFromForeignPtr0 iFPtr (fromIntegral nzMax)
-
-sparseGetNZ :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CInt)
-sparseGetNZ csm = do
-  withForeignPtr (CH.fPtr csm) $ \sm -> do
-    nCol <- triplet_get_ncol sm
-    nzp <- triplet_get_nz sm
-    nzFPtr <- newForeignPtr_ pp
-    return $ MVS.unsafeFromForeignPtr0 nzFPtr (fromIntegral nCol)
-
-sparseDoubleGetX :: CH.Matrix CH.Sparse -> IO (MVS.IOVector CDouble)
-sparseDoubleGetX csm = do
-  withForeignPtr (CH.fPtr csm) $ \sm -> do
-    nzMax <- triplet_get_nzMax sm
-    xp <- triplet_get_x sm
-    xFPtr <- newForeignPtr_ xp
-    return $ MVS.unsafeFromForeignPtr0 xFPtr (fromIntegral nzMax)    
--}
-
 -- | make an SpMatrix into a CHOLMOD sparse
 -- this thing should, but doesn't, free itself via ForeignPtr.
 allocSparse :: CSize -> CSize -> CSize -> Bool -> Bool -> CH.SType -> CH.XType -> ForeignPtr CH.Common -> IO (CH.Matrix CH.Sparse)
@@ -227,7 +197,6 @@ spMatrixRealToSparse fpc ms smX = do
   let (nrows, ncols, nnz) = getDims ms smX
       makeMV :: Storable b => Int -> Ptr b -> IO (MVS.IOVector b)
       makeMV n x = fmap (\fpx -> MVS.unsafeFromForeignPtr0 fpx n) $ newForeignPtr_ x
-  putStrLn $ "nnz=" ++ show nnz
   sparse <- allocSparse nrows ncols nnz True True (hcholmodSType ms) CH.xtReal fpc -- sorted (?) and packed.
   withForeignPtr (CH.fPtr sparse) $ \sm -> do
     p <- sparse_get_p sm >>= makeMV (fromIntegral $ ncols + 1)
@@ -449,18 +418,42 @@ tripletToSpMatrix pTriplet = do
   when debug $ SLA.prd sm    
   return sm
 
--- TODO: sparseToSpMatrix
-sparseToSpMatrix :: Ptr CH.Sparse -> IO (SLA.SpMatrix Double)
-sparseToSpMatrix pSparse = do
-  nRows <- CH.sparse_get_nrow pSparse
-  nCols <- CH.sparse_get_ncol pSparse
-  nZmax <- CH.sparse_get_nzmax pSparse
-  pV <- sparse_get_p pSparse >>= flip VS.unsafeFromForeignPtr0 (fromIntegral $ nCols + 1)
-  iV <- sparse_get_i pSparse >>= flip VS.unsafeFromForeignPtr0 (fromIntegral nZMax)
-  xV <- CH.sparse_get_x pSparse >>= flip VS.unsafeFromForeignPtr0 (fromIntegral nZMax)
-  sorted <- (/= 0) <$> sparse_get_sorted pSparse
-  packed <- (/= 0) <$> sparse_get_packed pSparse
-  nzV <- sparse_get_nz pSparse >>=
+-- we need some strictness??
+data Triplet = Triplet !Int !Int !Double deriving (Generic)
+
+instance DS.NFData Triplet
+  
+tripletToTuple :: Triplet -> (Int, Int, Double)
+tripletToTuple (Triplet i j x) = (i, j, x)
+
+sparseDoubleToSpMatrix :: Ptr CH.Sparse -> IO (SLA.SpMatrix Double)
+sparseDoubleToSpMatrix pSparse = do
+  nRows <- fromIntegral <$> CH.sparse_get_nrow pSparse
+  nCols <- fromIntegral <$> CH.sparse_get_ncol pSparse
+  nZmax <- fromIntegral <$> CH.sparse_get_nzmax pSparse
+  packed <- (== 1) <$> sparse_get_packed pSparse
+--  putStrLn $ "sparseDoubleToSpMatrix: nRows=" ++ show nRows ++ "; nCols=" ++ show nCols ++ "; nZmax=" ++ show nZmax
+--  putStrLn $ "packed=" ++ show packed
+  let makeVS :: Storable a => Int -> Ptr a -> IO (VS.Vector a)
+      makeVS n x = fmap (\fpx -> VS.unsafeFromForeignPtr0 fpx n) $ newForeignPtr_ x
+  pV <-  sparse_get_p pSparse >>= makeVS (fromIntegral $ nCols + 1) 
+  iV <- sparse_get_i pSparse >>= makeVS (fromIntegral nZmax)
+  xV <- CH.sparse_get_x pSparse >>= makeVS (fromIntegral nZmax)
+  nzV <- if packed
+         then sparse_get_nz pSparse >>= makeVS (fromIntegral nCols)
+         else return $ VS.empty
+  let rowVals = VB.zipWith (\i x -> (i,x)) (VS.convert iV) (VS.convert xV)
+      makeTripletsForCol :: Int -> [Triplet]
+      makeTripletsForCol j =
+        let startIndex = fromIntegral $ pV VS.! j
+            endIndex = fromIntegral $ if packed then (pV VS.! (j+1)) - 1 else nzV VS.! j
+            length = endIndex - startIndex + 1
+        in VB.toList $ fmap (\(i,x) -> Triplet (fromIntegral i) j (realToFrac x)) $ VB.unsafeSlice startIndex length rowVals
+      tripletsF = FL.Fold (\ts j -> makeTripletsForCol j : ts) [] concat
+      triplets = FL.fold tripletsF [0..(nCols - 1)]
+--  _ <- return $ rnf triplets
+  return $! SLA.fromListSM (nRows, nCols) $ fmap tripletToTuple triplets
+              
 
 printCommon :: T.Text -> ForeignPtr CH.Common -> IO ()
 printCommon t fpc = withForeignPtr fpc $ \fp -> do
@@ -549,6 +542,13 @@ foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_ncol"
 
 foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_nzmax" 
    sparse_get_nzmax :: Ptr CH.Sparse -> IO CSize
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_sorted" 
+   sparse_get_sorted :: Ptr CH.Sparse -> IO CInt
+
+foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_packed" 
+   sparse_get_packed :: Ptr CH.Sparse -> IO CInt
+
 
 foreign import ccall unsafe "cholmod_extras.h cholmodx_sparse_get_p" 
    sparse_get_p :: Ptr CH.Sparse -> IO (Ptr CInt)
