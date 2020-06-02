@@ -126,7 +126,7 @@ solveSparse fpc fpf ss smB = do
 --        smX <- tripletToSpMatrix pTripletX
 --        SLA.prd smX
         smX' <- sparseDoubleToSpMatrix pSparseX
---        SLA.prd smX'
+--        putStrLn $ show $ FL.fold FL.sum $ fmap (\(i,j,x) -> realToFrac (i + j) + x) $ SLA.toListSM smX'
 --        CH.sparse_free pSparseB pc
 --        withForeignPtr (CH.fPtr mTripletB) $ \pt -> CH.triplet_free pt pc       
 --        CH.triplet_free pTripletX pc
@@ -442,17 +442,18 @@ sparseDoubleToSpMatrix pSparse = do
   nzV <- if packed
          then sparse_get_nz pSparse >>= makeVS (fromIntegral nCols)
          else return $ VS.empty
-  let rowVals = VB.zipWith (\i x -> (i,x)) (VS.convert iV) (VS.convert xV)
+  let --rowVals = VB.zipWith (\i x -> (i,x)) (VS.convert iV) (VS.convert xV)
       makeTripletsForCol :: Int -> [Triplet]
       makeTripletsForCol j =
         let startIndex = fromIntegral $ pV VS.! j
             endIndex = fromIntegral $ if packed then (pV VS.! (j+1)) - 1 else nzV VS.! j
             length = endIndex - startIndex + 1
-        in VB.toList $ fmap (\(i,x) -> Triplet (fromIntegral i) j (realToFrac x)) $ VB.unsafeSlice startIndex length rowVals
+        in --fmap (\(i,x) -> Triplet (fromIntegral i) j (realToFrac x)) $ VB.unsafeSlice startIndex length rowVals
+          fmap (\n -> Triplet (fromIntegral $ iV VS.! n) j (realToFrac $ xV VS.! n)) $ [startIndex..endIndex]
       tripletsF = FL.Fold (\ts j -> makeTripletsForCol j : ts) [] concat
       triplets = FL.fold tripletsF [0..(nCols - 1)]
---  _ <- return $ rnf triplets
-  return $! SLA.fromListSM (nRows, nCols) $ fmap tripletToTuple triplets
+--  _ <- return $ DS.rnf1 triplets
+  return $ SLA.fromListSM (nRows, nCols) DS.$!! fmap tripletToTuple triplets 
               
 
 printCommon :: T.Text -> ForeignPtr CH.Common -> IO ()
