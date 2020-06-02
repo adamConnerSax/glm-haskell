@@ -314,9 +314,9 @@ spMatrixFactorizeP fpc fpf cfs ms smX = do
 --  triplet <- spMatrixToTriplet fpc ms smX
 --  when debug $ printTriplet (CH.fPtr triplet) "spMatrixCholesky" fpc
 --  sparse <- CH.tripletToSparse triplet fpc
---  printSparse (CH.fPtr sparse) "spMatrixFactorize, via triplet" fpc
+  --printSparse (CH.fPtr sparse) "spMatrixFactorize, via triplet" fpc
   sparse <- spMatrixRealToSparse fpc ms smX
---  printSparse (CH.fPtr sparse) "spMatrixFactorize, via direct" fpc
+  printSparse (CH.fPtr sparse) "spMatrixFactorize, via direct" fpc
   case cfs of
     FactorizeA -> CH.factorize sparse fpf fpc
     FactorizeAtAPlusBetaI x -> do
@@ -440,18 +440,28 @@ sparseDoubleToSpMatrix pSparse = do
   iV <- sparse_get_i pSparse >>= makeVS (fromIntegral nZmax)
   xV <- CH.sparse_get_x pSparse >>= makeVS (fromIntegral nZmax)
   nzV <- if packed
-         then sparse_get_nz pSparse >>= makeVS (fromIntegral nCols)
-         else return $ VS.empty
-  let --rowVals = VB.zipWith (\i x -> (i,x)) (VS.convert iV) (VS.convert xV)
-      makeTripletsForCol :: Int -> [Triplet]
-      makeTripletsForCol j =
-        let startIndex = fromIntegral $ pV VS.! j
-            endIndex = fromIntegral $ if packed then (pV VS.! (j+1)) - 1 else nzV VS.! j
-            length = endIndex - startIndex + 1
-        in --fmap (\(i,x) -> Triplet (fromIntegral i) j (realToFrac x)) $ VB.unsafeSlice startIndex length rowVals
-          fmap (\n -> Triplet (fromIntegral $ iV VS.! n) j (realToFrac $ xV VS.! n)) $ [startIndex..endIndex]
-      tripletsF = FL.Fold (\ts j -> makeTripletsForCol j : ts) [] concat
-      triplets = FL.fold tripletsF [0..(nCols - 1)]
+         then return $ VS.empty
+         else sparse_get_nz pSparse >>= makeVS (fromIntegral nCols)
+{-              
+  putStrLn $ "pV=" ++ show pV
+  putStrLn $ "iV=" ++ show iV
+  putStrLn $ "xV=" ++ show xV
+  putStrLn $ "nzV=" ++ show nzV
+-}
+  let rowVals = VB.zipWith (\i x -> (i,x)) (VS.convert iV) (VS.convert xV)
+--  putStrLn $ "rowVals=" ++ show rowVals
+  let makeTripletsForCol :: Int -> IO (VB.Vector Triplet)
+      makeTripletsForCol j = do
+        let startIndex :: Int = fromIntegral $ pV VS.! j
+            endIndex :: Int = fromIntegral $ if packed then (pV VS.! (j+1)) - 1 else nzV VS.! j
+            lengthSlice :: Int = (endIndex - startIndex) + 1
+--        putStrLn $ "j=" ++ show j
+--        putStrLn $ "startIndex=" ++ show startIndex
+--        putStrLn $ "endIndex=" ++ show endIndex
+        return $! fmap (\(i,x) -> Triplet (fromIntegral i) j (realToFrac x)) $! VB.slice startIndex lengthSlice (rowVals `DS.deepseq` rowVals)
+          --fmap (\n -> Triplet (fromIntegral $ iV VS.! n) j (realToFrac $ xV VS.! n)) $ [startIndex..endIndex]
+      tripletsF = FL.FoldM (\ts j -> fmap (: ts) (makeTripletsForCol j)) (return []) (return . VB.concat)
+  triplets <- FL.foldM tripletsF [0..(nCols - 1)]
 --  _ <- return $ DS.rnf1 triplets
   return $ SLA.fromListSM (nRows, nCols) DS.$!! fmap tripletToTuple triplets 
               

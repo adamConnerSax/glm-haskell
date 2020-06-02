@@ -252,7 +252,7 @@ main = do
       $  putStrLn
       $  "Random Effects:\n"
       ++ (T.unpack $ GLM.printRandomEffectsByLabel rebl)
-
+{-
     liftIO $ putStrLn $ "Boostrapping for confidence intervals"
 
     bootstraps <- GLM.parametricBootstrap mdVerbosity
@@ -265,6 +265,7 @@ main = do
                                           (sqrt sigma2_GLMM)
                                           10
                                           True
+-}
     smCondVar <- GLM.conditionalCovariances mm
                                             cf
                                             randomEffectCalc
@@ -292,6 +293,7 @@ main = do
                                  vb2_GLMM
                                  r
 -}
+{-          
           bootWCI <- GLM.predictWithCI
             mm
             (Just . getPredictor r)
@@ -302,7 +304,7 @@ main = do
             vb2_GLMM
             (S.mkCL 0.95)
             (GLM.BootstrapCI GLM.BCI_Accelerated (fmap (GLM.simplifyBootstraps q) bootstraps))
-
+-}
 
           predictCVCI <- GLM.predictWithCI
             mm
@@ -316,7 +318,7 @@ main = do
             (GLM.NaiveCondVarCI mBetaCov smCondVar)
 
 
-          return (r, obs, bootWCI, predictCVCI)
+          return (r, obs, {-bootWCI, -} predictCVCI)
 
     fitted <- traverse f (FL.fold FL.list frame)
     liftIO $ putStrLn $ "Fitted:\n" ++ (L.intercalate "\n" $ fmap show fitted)
