@@ -24,7 +24,6 @@ import qualified Polysemy.Error                as P
 import qualified Polysemy.State                as P
 import qualified Knit.Effect.Logger            as P
 
---import qualified GLM.Internal.Log              as Log
 import qualified Control.Foldl                 as FL
 import qualified Control.Exception             as X
 import           Control.Monad                  ( when
@@ -39,9 +38,6 @@ import           Data.Maybe                     (fromMaybe)
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
---import           Data.Typeable                  ( Typeable )
-
---import           Numeric.LinearAlgebra.Sparse   ( (#>) )
 
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Numeric.NLOPT                 as NL
@@ -50,7 +46,6 @@ import           System.IO.Unsafe               ( unsafePerformIO )
 
 
 import qualified Data.Map                      as M
---import           Data.Maybe                     ( isJust )
 import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
@@ -62,8 +57,6 @@ import           System.IO                      ( hSetBuffering
                                                 , hFlush
                                                 , BufferMode(..)
                                                 )
-
---import qualified Debug.Trace as Trace
 
 runEffectsVerboseIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsVerboseIO action =
@@ -118,15 +111,6 @@ glmExceptionLogger e = do
    P.logLE P.Info $ "GLM Error: " <> (T.pack $ show e)
    P.logLE P.Diagnostic $ "Exception Log:\n" <> l
    P.throw e
-
-{-
-allExceptionLogger :: GLM.Effects r => X.SomeException -> P.Sem r a
-allExceptionLogger e = do
-   l <- getGLMExceptionLog
-   P.logLE P.Info $ "Error: " <> (T.pack $ show e)
-   P.logLE P.Diagnostic $ "Exception Log:\n" <> l
-   P.throw e
--}
 
 lmmOptimizerToNLOPT
   :: GLM.LMMOptimizer
@@ -683,10 +667,6 @@ normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu mzvu) smUtM mVt vY =
 
     let vYMinusMu   = vY - vMu        
         vWtYMinusMu = VS.zipWith3 (\wt y mu -> sqrt wt * (y - mu)) vVSW vY vMu
---        v1 = VS.zipWith (\m yMinusMu -> yMinusMu / m) vM vYMinusMu
---        v2 = v1 + vEta
---        vR0 = VS.zipWith3 (\w m x -> sqrt w * m * x) vVarW vM v2
---        vR0 = VS.zipWith4 (\w m ym eta -> sqrt w * (ym + (m * eta))) vVarW vM vYMinusMu vEta -- for equations for u, beta
         vR0 = VS.zipWith (\w ym -> sqrt w * ym) vVSW vYMinusMu -- for equations for du, dBeta
         msvUt_r0 = GLM.MaybeZeroVec $ fmap (\smUt -> smUt SLA.#> (SD.toSparseVector vR0)) smUtM
         vVt_r0 = mVt LA.#> vR0
@@ -697,11 +677,13 @@ normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu mzvu) smUtM mVt vY =
     P.logLE P.Diagnostic
       $ "min(vWtYMinusMu)="
       <> (T.pack $ show $ VS.minimum vWtYMinusMu)
-      <> "; max(vWtYMinusMu)=" <> (T.pack $ show $ VS.maximum vWtYMinusMu)          
+      <> "; max(vWtYMinusMu)=" <> (T.pack $ show $ VS.maximum vWtYMinusMu)
+{-      
     P.logLE P.Diagnostic $ "min(r0)=" <> (T.pack $ show $ VS.minimum vR0) <> "; max(r0)=" <> (T.pack $ show $ VS.maximum vR0)
     P.logLE P.Diagnostic $ "min(vRhsX)=" <> (T.pack $ show $ VS.minimum vRhsX) <> "; max(vRhsX)=" <> (T.pack $ show $ VS.maximum vRhsX)
     P.logLE P.Diagnostic $ "min(vVt_rO)=" <> (T.pack $ show $ VS.minimum vVt_r0) <> "; max(vVt_r0))=" <> (T.pack $ show $ VS.maximum vVt_r0)  
---    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svUt_r0, vVt_r0))
+    P.logLE P.Diagnostic $ "RHS=" <> (T.pack $ show (svUt_r0, vVt_r0))
+-}
 --    return (msvUt_r0, vVt_r0)
     return (msvRhsZ, vRhsX)
 
@@ -958,6 +940,8 @@ updateEtaBetaU cf mm maxHalvings pirlsType zStar pdFunction vEta vBeta mzvu =
       <> (T.pack $ show $ rXX chol)
       <> "\nVtV="
       <> (T.pack $ show (LA.tr mV LA.<> mV))
+    logSoFar <- getGLMExceptionLog
+    P.logLE P.Diagnostic $ "log so far: " <> logSoFar
     (pdFinal, vEta', vdBeta', mzvdu') <- refine_dBetaU mm
                                          maxHalvings
                                          pirlsType
@@ -975,6 +959,7 @@ updateEtaBetaU cf mm maxHalvings pirlsType zStar pdFunction vEta vBeta mzvu =
       <> "; ||dBeta||^2="
       <> (T.pack $ show $ (vdBeta' LA.<.> vdBeta'))
       <> ")." --- (Eta=" <> (T.pack $ show vEta') <> ")"
+--    P.throw $ GLM.OtherGLMError "Test Exception Logging"
     return (pdFinal, vEta', vBeta', mzvu', chol, msmU)
 
 data ShrinkPD = Shrunk Double GLM.EtaVec GLM.BetaVec GLM.MaybeZeroUVec  | NotShrunk Double deriving (Show)
@@ -994,14 +979,6 @@ refine_dBetaU
 refine_dBetaU mm maxHalvings pirlsType zStar pdF vEta mzvu vdBeta mzvdu =
   P.wrapPrefix "refineDBetaU" $ do
     P.logLE P.Diagnostic $ "Starting..."
-    {-        
-          <>  "\nvEta="
-          <> (T.pack $ show vEta)
-          <> "\nsvU'="
-          <> (T.pack $ show svU')
-          <> "\ndBetaU="
-          <> (T.pack $ show dBetaU)
--}
     let --pdF x y = fst <$> profiledDeviance' PDVNone ML glmm reCalc vTh chol x y
         mX  = GLM.rmsFixedPredictors $ GLM.regressionModelSpec mm
         vY  = GLM.rmsObservations $ GLM.regressionModelSpec mm
@@ -1070,12 +1047,21 @@ spUV mm@(GLM.GeneralizedLinearMixedModel _) pirlsType zStar vVSW vM = P.wrapPref
       vWUV  = VS.zipWith (\m vsw -> sqrt vsw * m) vM vVSW -- glmer: sqrtWrkWt ?  
       smWUV = SLA.mkDiagonal (VS.length vWUV) $ VS.toList vWUV
       mV    = (LA.diag vWUV) LA.<> mX
+      mVt = LA.tr' mV
       msmU  = case pirlsType of
         SolveBetaU -> Just $ smWUV SLA.#~# (GLM.smZS zStar)
         BetaAtZeroU -> Nothing
+{-        
   P.logLE P.Diagnostic $ "min(vWUV)=" <> (T.pack $ show $ VS.minimum vWUV ) <> "; max(vWUV)=" <> (T.pack $ show $ VS.maximum vWUV )
-  P.logLE P.Diagnostic $ "V'V" <> (T.pack $ show $ (LA.tr mV) LA.<> mV)
-  P.logLE P.Diagnostic $ "X'X" <> (T.pack $ show $ (LA.tr mX) LA.<> mX)
+  P.logLE P.Diagnostic $ "length(isNaN(vVSW))=" <> (T.pack $ show $ FL.fold FL.length $ VS.toList $ VS.filter isNaN vVSW)
+  P.logLE P.Diagnostic $ "length(isNaN(vM))=" <> (T.pack $ show $ FL.fold FL.length $ VS.toList $ VS.filter isNaN vM)
+  P.logLE P.Diagnostic $ "length(isNaN(vWUV))=" <> (T.pack $ show $ FL.fold FL.length $ VS.toList $ VS.filter isNaN vWUV)
+  P.logLE P.Diagnostic $ "vWUV=" <> (T.pack $ show vWUV)
+  P.logLE P.Diagnostic $ "row 0 of Vt: " <> (T.pack $ show $ head $ LA.toRows mVt)
+  P.logLE P.Diagnostic $ "col 0 of V: " <> (T.pack $ show $ head $ LA.toColumns mV)
+  P.logLE P.Diagnostic $ "V'V" <> (T.pack $ show $ mVt LA.<> mV)
+  P.logLE P.Diagnostic $ "X'X" <> (T.pack $ show $ (LA.tr' mX) LA.<> mX)
+-}
   return (msmU, mV)
 
 {-
@@ -1227,16 +1213,22 @@ betaFrom' mm zStar vEta mzvu = P.wrapPrefix "betaFrom'" $ do
        vW   = GLM.weights mm
        vVSW = GLM.varianceScaledWeights (observationsDistribution mm) vW vMu       
        lf =  GLM.linkFunction $ linkFunctionType mm
-  P.logLE P.Diagnostic $ "min(vY)=" <> (T.pack $ show $ VS.minimum vY) <> "; max(vY)=" <> (T.pack $ show $ VS.maximum vY)  
-  P.logLE P.Diagnostic $ "min(vMu)=" <> (T.pack $ show $ VS.minimum vMu) <> "; max(vMu=" <> (T.pack $ show $ VS.maximum vMu)  
-  P.logLE P.Diagnostic $ "min(vVSW)=" <> (T.pack $ show $ VS.minimum vVSW) <> "; max(vVSW)=" <> (T.pack $ show $ VS.maximum vVSW)  
+{-
+  P.logLE P.Diagnostic $ "min(vY)=" <> (T.pack $ show $ VS.minimum vY) <> "; max(vY)=" <> (T.pack $ show $ VS.maximum vY)
+  P.logLE P.Diagnostic $ "min(vM)=" <> (T.pack $ show $ VS.minimum vM) <> "; max(vM)=" <> (T.pack $ show $ VS.maximum vM)    
+  P.logLE P.Diagnostic $ "min(vMu)=" <> (T.pack $ show $ VS.minimum vMu) <> "; max(vMu=" <> (T.pack $ show $ VS.maximum vMu)
+  P.logLE P.Diagnostic $ "length(isNaN(vMu))=" <> (T.pack $ show $ FL.fold FL.length $ VS.toList $ VS.filter isNaN vMu)
+  P.logLE P.Diagnostic $ "length(isNaN(vW))=" <> (T.pack $ show $ FL.fold FL.length $ VS.toList $ VS.filter isNaN vW)
+  P.logLE P.Diagnostic $ "length(isNaN(vVSW))=" <> (T.pack $ show $ FL.fold FL.length $ VS.toList $ VS.filter isNaN vVSW)
+  P.logLE P.Diagnostic $ "min(vVSW)=" <> (T.pack $ show $ VS.minimum vVSW) <> "; max(vVSW)=" <> (T.pack $ show $ VS.maximum vVSW)
+-}
   P.logLE P.Diagnostic $ "Computing mV at u=0"
   (_, mV) <- spUV mm BetaAtZeroU zStar vVSW vM 
-  P.logLE P.Diagnostic $ "min(mV)=" <> (T.pack $ show $ LA.minElement mV) <> "; max(mV)=" <> (T.pack $ show $ LA.maxElement mV)  
+--  P.logLE P.Diagnostic $ "min(mV)=" <> (T.pack $ show $ LA.minElement mV) <> "; max(mV)=" <> (T.pack $ show $ LA.maxElement mV)  
   let mVt = LA.tr mV
   P.logLE P.Diagnostic $ "Computing RhsX (=V'r0) at u=0"
   (_, vRhsX) <- normalEquationsRHS (NormalEquationsGLMM vVSW vM lf vEta vMu mzvu) Nothing mVt vY
-  P.logLE P.Diagnostic $ "min(vRhsX)=" <> (T.pack $ show $ VS.minimum vRhsX) <> "; max(vRhsX)=" <> (T.pack $ show $ VS.maximum vRhsX)  
+--  P.logLE P.Diagnostic $ "min(vRhsX)=" <> (T.pack $ show $ VS.minimum vRhsX) <> "; max(vRhsX)=" <> (T.pack $ show $ VS.maximum vRhsX)  
   let vTv = mVt LA.<> mV
       mRxx =  LA.chol $ LA.trustSym vTv
       betaSols = LA.cholSolve mRxx (LA.asColumn vRhsX)
