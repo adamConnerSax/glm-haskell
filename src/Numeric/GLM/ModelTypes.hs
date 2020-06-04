@@ -11,6 +11,7 @@ module Numeric.GLM.ModelTypes
   ( GLMError(..)
   , Effects
   , EffectsIO
+  , AtomicErrorLog
 --  , EffectsWithLoggedError
 --  , EffectsWithLoggedErrorIO
   , GLMEffects
@@ -86,6 +87,7 @@ import qualified Numeric.SparseDenseConversions
                                                as SD
 
 import           Control.Monad                  ( when )
+import qualified Control.Concurrent.STM            as CC
 import qualified Data.List                     as L
 import qualified Data.Map                      as M
 import           Data.Maybe                     ( isJust )
@@ -110,15 +112,15 @@ import qualified Knit.Effect.Logger            as P
 data GLMError = OtherGLMError T.Text | NonGLMError T.Text deriving (Show, Typeable)
 instance X.Exception GLMError
 
-type Effects r = (P.Member (P.Error GLMError) r, P.Member (P.State [T.Text]) r, P.LogWithPrefixesLE r)
+type Effects r = (P.Member (P.Error GLMError) r, P.Member (P.State AtomicErrorLog) r, P.LogWithPrefixesLE r)
 type EffectsIO r = ( Effects r
                    , P.Member (P.Embed IO) r)
 
 --type EffectsWithLoggedError r = (Effects r, P.Member (P.State [T.Text]) r)
 --type EffectsWithLoggedErrorIO r = (EffectsWithLoggedError r, P.Member (P.Embed IO) r)
 
-type ErrorLog = [T.Text]
-type GLMEffects a = P.Sem '[P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.State [T.Text], P.Embed IO, P.Final IO] a
+type AtomicErrorLog = CC.TVar [T.Text]
+type GLMEffects a = P.Sem '[P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.State AtomicErrorLog, P.Embed IO, P.Final IO] a
 
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double

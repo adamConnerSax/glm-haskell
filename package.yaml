@@ -45,6 +45,7 @@ dependencies:
 - say >= 0.1.0.1 && < 0.2
 - sparse-linear-algebra >= 0.3 && < 0.4
 - statistics >= 0.15.0 && < 0.16
+- stm >= 2.4.0 && < 2.6
 - text >= 1.1.0.1 && < 1.3
 - vector >= 0.11.0.0 && < 0.13
 - vector-split >= 1.0.0 && < 1.1

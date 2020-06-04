@@ -49,7 +49,7 @@ import           System.IO                      ( hSetBuffering
 verbose = True 
 
 runFIO =
-  let runGLMEffects = if verbose then runEffectsVerboseIO else runEffectsIO
+  let runGLMEffects = if verbose then runEffectsVerboseIO Nothing else runEffectsIO Nothing
   in  runGLMEffects . GLM.asyncToIOFinal . GLM.runRandomIO
 
 throwEither

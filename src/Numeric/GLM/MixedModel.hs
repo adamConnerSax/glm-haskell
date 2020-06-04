@@ -24,6 +24,7 @@ import qualified Polysemy.Error                as P
 import qualified Polysemy.State                as P
 import qualified Knit.Effect.Logger            as P
 
+import qualified Control.Concurrent.STM        as CC
 import qualified Control.Foldl                 as FL
 import qualified Control.Exception             as X
 import           Control.Monad                  ( when
@@ -58,29 +59,35 @@ import           System.IO                      ( hSetBuffering
                                                 , BufferMode(..)
                                                 )
 
-runEffectsVerboseIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
-runEffectsVerboseIO action =
-  (P.catch action glmExceptionLogger)
-  & P.filteredLogEntriesToIO P.logAll
-  & P.runError
-  & runLogOnGLMException
-  & P.embedToFinal
-  & P.runFinal
+runEffectsVerboseIO :: Maybe GLM.AtomicErrorLog -> GLM.GLMEffects a -> IO (Either GLM.GLMError a)
+runEffectsVerboseIO logTVM action = do
+  logTV <- case logTVM of
+    Nothing -> CC.atomically $ CC.newTVar []
+    Just x -> return x
+  (P.catch action $ glmExceptionLogger "Caught in runEffectsVerboseIO")
+    & P.filteredLogEntriesToIO P.logAll
+    & P.runError
+    & (fmap snd . runLogOnGLMException logTV)
+    & P.embedToFinal
+    & P.runFinal
 
 
-runEffectsIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
-runEffectsIO action =
-  (P.catch action glmExceptionLogger)
-  & P.filteredLogEntriesToIO P.nonDiagnostic
-  & P.runError
-  & runLogOnGLMException
-  & P.embedToFinal
-  & P.runFinal
+runEffectsIO :: Maybe GLM.AtomicErrorLog -> GLM.GLMEffects a -> IO (Either GLM.GLMError a)
+runEffectsIO logTVM action = do
+  logTV <- case logTVM of
+    Nothing -> CC.atomically $ CC.newTVar []
+    Just x -> return x
+  (P.catch action $ glmExceptionLogger "Caught in runEffectsIO")
+    & P.filteredLogEntriesToIO P.nonDiagnostic
+    & P.runError
+    & (fmap snd . runLogOnGLMException logTV)
+    & P.embedToFinal
+    & P.runFinal
 
 
-unsafePerformEffects :: Bool -> GLM.GLMEffects a -> a -> a
-unsafePerformEffects verbose action def = 
-  let run = if verbose then runEffectsVerboseIO else runEffectsIO 
+unsafePerformEffects :: Bool -> Maybe GLM.AtomicErrorLog -> GLM.GLMEffects a -> a -> a
+unsafePerformEffects verbose logTVM action def = 
+  let run = if verbose then runEffectsVerboseIO logTVM else runEffectsIO logTVM
   in (P.wrapPrefix "unsafePerformEffects" action)
      & run
      & fmap (either X.throwIO return)
@@ -93,22 +100,32 @@ unsafePerformEffects verbose action def =
      & unsafePerformIO
 
 
-logOnGLMException :: P.Member (P.State [T.Text]) r => T.Text -> P.Sem r ()
-logOnGLMException t = P.modify (\msgs -> t : msgs)
+logOnGLMException :: (P.Member (P.State GLM.AtomicErrorLog) r
+                     , P.Member (P.Embed IO) r
+                     )
+                  => T.Text -> P.Sem r ()
+logOnGLMException t = do
+  curLogTV <- P.get
+  P.embed $ CC.atomically $ CC.modifyTVar curLogTV (\msgs -> t : msgs)
 
-runLogOnGLMException :: P.Sem (P.State [T.Text] ': r) a -> P.Sem r a
-runLogOnGLMException = fmap snd . P.runState []
+
+runLogOnGLMException :: GLM.AtomicErrorLog -> P.Sem (P.State GLM.AtomicErrorLog ': r) a -> P.Sem r (GLM.AtomicErrorLog, a)
+runLogOnGLMException = P.runState
 
 glmExceptionLogToText :: [T.Text] -> T.Text
 glmExceptionLogToText =  T.intercalate "\n" . reverse
 
-getGLMExceptionLog :: P.Member (P.State [T.Text]) r => P.Sem r T.Text
-getGLMExceptionLog = glmExceptionLogToText <$> P.get
+getGLMExceptionLog :: (P.Member (P.State GLM.AtomicErrorLog) r
+                      , P.Member (P.Embed IO) r
+                       )
+                       => P.Sem r T.Text
+getGLMExceptionLog = glmExceptionLogToText <$> (P.get >>= P.embed . CC.atomically . CC.readTVar)
 
-glmExceptionLogger :: GLM.Effects r => GLM.GLMError -> P.Sem r a
-glmExceptionLogger e = do
+glmExceptionLogger :: GLM.EffectsIO r => T.Text -> GLM.GLMError -> P.Sem r a
+glmExceptionLogger t e = do
    l <- getGLMExceptionLog
    P.logLE P.Info $ "GLM Error: " <> (T.pack $ show e)
+   P.logLE P.Diagnostic t 
    P.logLE P.Diagnostic $ "Exception Log:\n" <> l
    P.throw e
 
@@ -170,6 +187,7 @@ minimizeDeviance
 minimizeDeviance verbosity dt mm reCalc th0 = 
   flip P.catch (\(e :: GLM.GLMError) -> do
                      l <- getGLMExceptionLog
+                     P.logLE P.Diagnostic "Caught in minimizeDeviance"
                      P.logLE P.Diagnostic $ "Exception Log:\n" <> l
                      P.throw e
                  )
@@ -216,6 +234,7 @@ minimizeDevianceInner
        ) -- ^ (theta, profiled_deviance, sigma2, beta, u, b, cholesky blocks)
 minimizeDevianceInner verbosity dt mm reCalc cf th0 =
   P.wrapPrefix "minimizeDevianceInner" $ do
+    logTV <- P.embed $ CC.atomically $ CC.newTVar []         
     let
       pdv = case verbosity of
         MDVNone   -> PDVNone
@@ -236,9 +255,11 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
              , GLM.MaybeZeroBVec
              , CholeskySolutions
              )
+  
       pd os x = profiledDeviance pdv cf dt mm reCalc os (Just x)
       obj x = unsafePerformEffects
         (verbosity >= MDVSimple)
+        (Just logTV)
         (fmap (\(d, _, _, _, _, _) -> d) $ pd objectiveOs x)
         0
       levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
@@ -927,21 +948,20 @@ updateEtaBetaU cf mm maxHalvings pirlsType zStar pdFunction vEta vBeta mzvu =
       <> (T.pack $ show $ VS.maximum vBeta)
     (vdBeta, mzvdu, chol, msmU, mV)             <- compute_dBetaU cf mm pirlsType zStar vEta mzvu
 --    let dBetaU = GLM.diffBetaU betaU betaU0
-    logOnGLMException $ "updateEtaBetaU: "
-      <> "beta0="
-      <> (T.pack $ show vBeta)
-      <> "\nd(beta)="
-      <> (T.pack $ show vdBeta )
-      <> "\nEta="
-      <> (T.pack $ show vEta)
-      <> "\nDist="
-      <> (T.pack $ show  $ observationsDistribution mm)
-      <> "\nRxx="
-      <> (T.pack $ show $ rXX chol)
-      <> "\nVtV="
-      <> (T.pack $ show (LA.tr mV LA.<> mV))
-    logSoFar <- getGLMExceptionLog
-    P.logLE P.Diagnostic $ "log so far: " <> logSoFar
+    logOnGLMException
+      $ "updateEtaBetaU: "
+      <> "min(vBeta)="
+      <> (T.pack $ show $ VS.minimum vBeta) 
+      <> "; max(vBeta)="
+      <> (T.pack $ show $ VS.maximum vBeta)
+      <> "\nmin(dBeta)="
+      <> (T.pack $ show $ VS.minimum vdBeta)
+      <> "; max(dBeta)="
+      <> (T.pack $ show $ VS.maximum vdBeta) 
+      <> "\nmin(Eta)="
+      <> (T.pack $ show $ VS.minimum vEta)
+      <> "; max(Eta)="
+      <> (T.pack $ show $ VS.maximum vEta)
     (pdFinal, vEta', vdBeta', mzvdu') <- refine_dBetaU mm
                                          maxHalvings
                                          pirlsType
@@ -1110,6 +1130,7 @@ compute_dBetaU cf mm@(GLM.GeneralizedLinearMixedModel _) pirlsType zStar vEta mz
                              mV
                              neqs
                              (GLM.mixedModelSpec mm)
+--    P.throw $ GLM.OtherGLMError "Test Exception logging..."
     P.logLE P.Diagnostic $ "min(dBeta)=" <> (T.pack $ show $ VS.minimum vdBeta) <> "; max(dBeta)=" <> (T.pack $ show $ VS.maximum vdBeta)
     P.logLE P.Diagnostic $ "min(du)="
       <> (T.pack $ show $ fmap (VB.minimum . SLA.toVector) mzvdu)
