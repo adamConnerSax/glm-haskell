@@ -959,7 +959,6 @@ updateEtaBetaU cf mm maxHalvings pirlsType zStar pdFunction vEta vBeta mzvu =
       <> "; ||dBeta||^2="
       <> (T.pack $ show $ (vdBeta' LA.<.> vdBeta'))
       <> ")." --- (Eta=" <> (T.pack $ show vEta') <> ")"
-    P.throw $ GLM.OtherGLMError "Test Exception Logging"
     return (pdFinal, vEta', vBeta', mzvu', chol, msmU)
 
 data ShrinkPD = Shrunk Double GLM.EtaVec GLM.BetaVec GLM.MaybeZeroUVec  | NotShrunk Double deriving (Show)
