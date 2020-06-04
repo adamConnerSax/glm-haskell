@@ -117,8 +117,8 @@ type EffectsIO r = ( Effects r
 --type EffectsWithLoggedError r = (Effects r, P.Member (P.State [T.Text]) r)
 --type EffectsWithLoggedErrorIO r = (EffectsWithLoggedError r, P.Member (P.Embed IO) r)
 
-
-type GLMEffects a = P.Sem '[P.State [T.Text], P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.Embed IO, P.Final IO] a
+type ErrorLog = [T.Text]
+type GLMEffects a = P.Sem '[P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.State [T.Text], P.Embed IO, P.Final IO] a
 
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double

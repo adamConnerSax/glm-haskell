@@ -61,9 +61,9 @@ import           System.IO                      ( hSetBuffering
 runEffectsVerboseIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsVerboseIO action =
   (P.catch action glmExceptionLogger)
-  & runLogOnGLMException
   & P.filteredLogEntriesToIO P.logAll
-  & P.errorToIOFinal
+  & P.runError
+  & runLogOnGLMException
   & P.embedToFinal
   & P.runFinal
 
@@ -71,9 +71,9 @@ runEffectsVerboseIO action =
 runEffectsIO :: GLM.GLMEffects a -> IO (Either GLM.GLMError a)
 runEffectsIO action =
   (P.catch action glmExceptionLogger)
-  & runLogOnGLMException
   & P.filteredLogEntriesToIO P.nonDiagnostic
-  & P.errorToIOFinal
+  & P.runError
+  & runLogOnGLMException
   & P.embedToFinal
   & P.runFinal
 
@@ -959,7 +959,7 @@ updateEtaBetaU cf mm maxHalvings pirlsType zStar pdFunction vEta vBeta mzvu =
       <> "; ||dBeta||^2="
       <> (T.pack $ show $ (vdBeta' LA.<.> vdBeta'))
       <> ")." --- (Eta=" <> (T.pack $ show vEta') <> ")"
---    P.throw $ GLM.OtherGLMError "Test Exception Logging"
+    P.throw $ GLM.OtherGLMError "Test Exception Logging"
     return (pdFinal, vEta', vBeta', mzvu', chol, msmU)
 
 data ShrinkPD = Shrunk Double GLM.EtaVec GLM.BetaVec GLM.MaybeZeroUVec  | NotShrunk Double deriving (Show)
