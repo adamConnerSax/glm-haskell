@@ -60,27 +60,21 @@ import           System.IO                      ( hSetBuffering
                                                 )
 
 runEffectsVerboseIO :: Maybe GLM.AtomicErrorLog -> GLM.GLMEffects a -> IO (Either GLM.GLMError a)
-runEffectsVerboseIO logTVM action = do
-  logTV <- case logTVM of
-    Nothing -> CC.atomically $ CC.newTVar []
-    Just x -> return x
+runEffectsVerboseIO logTVM action =   
   (P.catch action $ glmExceptionLogger "Caught in runEffectsVerboseIO")
     & P.filteredLogEntriesToIO P.logAll
     & P.runError
-    & (fmap snd . runLogOnGLMException logTV)
+    & (fmap snd . runLogOnGLMException logTVM)
     & P.embedToFinal
     & P.runFinal
 
 
 runEffectsIO :: Maybe GLM.AtomicErrorLog -> GLM.GLMEffects a -> IO (Either GLM.GLMError a)
-runEffectsIO logTVM action = do
-  logTV <- case logTVM of
-    Nothing -> CC.atomically $ CC.newTVar []
-    Just x -> return x
+runEffectsIO logTVM action = 
   (P.catch action $ glmExceptionLogger "Caught in runEffectsIO")
     & P.filteredLogEntriesToIO P.nonDiagnostic
     & P.runError
-    & (fmap snd . runLogOnGLMException logTV)
+    & (fmap snd . runLogOnGLMException logTVM)
     & P.embedToFinal
     & P.runFinal
 
@@ -109,8 +103,12 @@ logOnGLMException t = do
   P.embed $ CC.atomically $ CC.modifyTVar curLogTV (\msgs -> t : msgs)
 
 
-runLogOnGLMException :: GLM.AtomicErrorLog -> P.Sem (P.State GLM.AtomicErrorLog ': r) a -> P.Sem r (GLM.AtomicErrorLog, a)
-runLogOnGLMException = P.runState
+runLogOnGLMException :: P.Member (P.Embed IO) r => Maybe GLM.AtomicErrorLog -> P.Sem (P.State GLM.AtomicErrorLog ': r) a -> P.Sem r (GLM.AtomicErrorLog, a)
+runLogOnGLMException logTVM action = do
+  logTV <- case logTVM of
+    Nothing -> P.embed $ CC.atomically $ CC.newTVar []
+    Just x -> return x  
+  P.runState logTV action
 
 glmExceptionLogToText :: [T.Text] -> T.Text
 glmExceptionLogToText =  T.intercalate "\n" . reverse
