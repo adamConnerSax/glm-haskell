@@ -40,6 +40,7 @@ import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
 
+import qualified Numeric.IEEE as IEEE
 import qualified Numeric.LinearAlgebra         as LA
 import qualified Numeric.NLOPT                 as NL
 import           System.IO.Unsafe               ( unsafePerformIO )
@@ -259,7 +260,7 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
         (verbosity >= MDVSimple)
         (Just logTV)
         (fmap (\(d, _, _, _, _, _) -> d) $ pd objectiveOs x)
-        0
+        IEEE.maxFinite -- since we're minimimizing, 0 is problematic since it makes the error throwing region attractive
       levels    = GLM.mmsFitSpecByGroup $ GLM.mixedModelSpec mm
       thetaLB   = thetaLowerBounds levels
       algorithm = (lmmOptimizerToNLOPT $ GLM.lmmOptimizer $ GLM.lmmControls mm)
@@ -287,7 +288,7 @@ minimizeDevianceInner verbosity dt mm reCalc cf th0 =
 -- ugh.  But I dont know a way in NLOPT to have bounds on some not others.
 thetaLowerBounds :: GLM.FitSpecByGroup g -> NL.Bounds
 thetaLowerBounds groupFSM =
-  let negInfinity :: Double = negate $ 1 / 0
+  let negInfinity :: Double = negate $ 1 / 0      
   in  NL.LowerBounds $ setCovarianceVector groupFSM 0 negInfinity --FL.fold fld levels
 
 setCovarianceVector
