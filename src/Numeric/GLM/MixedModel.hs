@@ -212,7 +212,8 @@ minimizeDeviance verbosity dt mm reCalc th0 =
       return (res, vMu, cholmodAnalysis)
 
 
-
+-- TODO: should minimizeDevianceInner take x, the previous value of PD,  and return x+1 or 2*x when an error is thrown?
+-- 0 was bad.  I feel very dumb.  But maxFinite might be bad too, just in a more subtle way. 
 minimizeDevianceInner
   :: GLM.EffectsIO r
   => MinimizeDevianceVerbosity
