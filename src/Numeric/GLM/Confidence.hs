@@ -23,8 +23,7 @@ import           Numeric.GLM.Bootstrap          ( BootstrapCIType(..) )
 
 import qualified Statistics.Types              as S
 
-import qualified Knit.Effect.Logger            as P
-
+import qualified Knit.Report as K
 
 
 -- TODO: I should add a likelihood test.  Once I figure out how to do it.
@@ -42,7 +41,7 @@ predictWithCI
   -> VS.Vector Double --vb
   -> S.CL Double
   -> ConfidenceType
-  -> P.Sem r (Double, (Double, Double))
+  -> K.Sem r (Double, (Double, Double))
 predictWithCI mm getPredictorM getLabelM rc ebg vBeta vb cl (NaiveCondVarCI mBetaCov smCondVar)
   = GLM.predictWithCondVarCI mm
                              getPredictorM
