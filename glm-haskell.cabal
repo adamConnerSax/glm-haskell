@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 754282e8be3af6d23e41c97f34c5130f544d9721bc814a09a79323176e0a6009
+-- hash: f3881ae9dd3e7ee401cf0b2485aef547da88e5a34a7cd6c1610fff09aac8dcf8
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -88,6 +88,7 @@ library
     , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
+    , primitive <=0.7.1
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
     , say >=0.1.0.1 && <0.2
@@ -145,6 +146,7 @@ test-suite CHOLMOD-test
     , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
+    , primitive <=0.7.1
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
     , say >=0.1.0.1 && <0.2
@@ -192,6 +194,7 @@ test-suite GLMM-test
     , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
+    , primitive <=0.7.1
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
     , say >=0.1.0.1 && <0.2
@@ -240,6 +243,7 @@ test-suite LMM-test
     , polysemy-RandomFu >=0.4.0.0 && <0.5
     , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
+    , primitive <=0.7.1
     , profunctors >=5.3 && <5.5
     , random-fu >=0.2.7.3 && <0.3
     , say >=0.1.0.1 && <0.2

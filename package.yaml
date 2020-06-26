@@ -40,6 +40,7 @@ dependencies:
 - polysemy-zoo >= 0.3.0 && < 0.8
 - polysemy-plugin >= 0.2.2 && < 0.5
 - polysemy-RandomFu >= 0.4.0.0 && < 0.5
+- primitive <= 0.7.1
 - profunctors >= 5.3 && < 5.5
 - random-fu >= 0.2.7.3 && < 0.3
 - say >= 0.1.0.1 && < 0.2

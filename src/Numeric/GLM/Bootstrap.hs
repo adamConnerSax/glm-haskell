@@ -53,7 +53,8 @@ import qualified Data.Random.Distribution.Binomial
 import qualified Data.Random.Distribution.Poisson
                                                as DR
 
-import qualified Knit.Effect.Logger            as P
+import qualified Knit.Effect.Logger            as K
+import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
 import qualified Polysemy.RandomFu             as P
 import           Polysemy.RandomFu              ( RandomFu
@@ -128,7 +129,7 @@ parametricBootstrap
   -> Bool
   -> P.Sem r [(GLM.BetaVec, GLM.MaybeZeroUVec, GLM.MaybeZeroVec (VS.Vector Double))] -- beta, u and b
 parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
-  P.wrapPrefix "parametricBootstrap" $ do
+  K.wrapPrefix "parametricBootstrap" $ do
     let (fpC, fpF, smP) = cf
     factorQueue <- liftIO $ do
       nFactors <- if doConcurrently then getNumCapabilities else return 1
@@ -152,8 +153,8 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
           generateSamples (GLM.observationsDistribution mm0) vMuSol devSol
 
         solveOne (n, newMM) =
-          P.wrapPrefix ("Bootstrap (" <> (T.pack $ show n) <> ")") $ do
-            P.logLE P.Diagnostic "Starting..."
+          K.wrapPrefix ("Bootstrap (" <> (T.pack $ show n) <> ")") $ do
+            K.logLE K.Diagnostic "Starting..."
             cs                     <- liftIO $ KQ.readQueue factorQueue -- get a factor when available.  Blocks until then
             cf'                    <- cholmodFactor cs
             (_, _, _, vBeta, mzvu, mzvb, _) <- GLM.minimizeDevianceInner mdv
@@ -163,11 +164,11 @@ parametricBootstrap mdv dt mm0 reCalc cf thSol vMuSol devSol n doConcurrently =
                                                cf'
                                                thSol
             liftIO $ KQ.writeQueue factorQueue (CS_Computed cf') -- put the factor back
-            P.logLE P.Diagnostic "Finished."
+            K.logLE K.Diagnostic "Finished."
             return (vBeta, mzvu, mzvb)
     newObservations <- mapM (const generateOne) $ replicate n ()
 --    let asMat = LA.fromColumns (vMuSol : newObservations)
---    P.logLE P.Info $ "vMuSol | sims=\n" <> (T.pack $ show asMat)
+--    K.logLE K.Info $ "vMuSol | sims=\n" <> (T.pack $ show asMat)
     let newMixedModels =
           fmap (\os -> GLM.changeMMObservations os mm0) newObservations
         seqF = if doConcurrently
@@ -280,7 +281,7 @@ bootstrapCI BCI_Accelerated x bxs cl = do
     indexL     = round $ indexScale * alphaZ zAlpha
     indexU     = round $ indexScale * alphaZ z1mAlpha
     sortedBxs  = L.sort bxs
-  P.logLE P.Diagnostic
+  K.logLE K.Diagnostic
     $  "indexL="
     <> (T.pack $ show indexL)
     <> "; indexU="
