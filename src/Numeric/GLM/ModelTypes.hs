@@ -95,7 +95,6 @@ import qualified Data.Text                     as T
 import qualified Data.Vector                   as VB
 import qualified Data.Vector.Storable          as VS
 import qualified Numeric.LinearAlgebra         as LA
-import qualified Numeric.NLOPT                 as NL
 import qualified Data.Sparse.SpMatrix          as SLA
 import qualified Data.Sparse.SpVector          as SLA
 import qualified Data.Sparse.Common            as SLA
@@ -104,7 +103,6 @@ import qualified Control.Exception             as X
 import           Data.Typeable                  ( Typeable )
 import qualified Polysemy                      as P
 import qualified Polysemy.Error                as P
-import qualified Polysemy.Reader                as P
 import qualified Polysemy.State                as P
 import qualified Knit.Effect.Logger            as P
 
@@ -120,7 +118,7 @@ type EffectsIO r = ( Effects r
 --type EffectsWithLoggedErrorIO r = (EffectsWithLoggedError r, P.Member (P.Embed IO) r)
 
 type AtomicErrorLog = CC.TVar [T.Text]
-type GLMEffects a = P.Sem '[P.Reader P.LogWithPrefixIO, P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.State AtomicErrorLog, P.Embed IO, P.Final IO] a
+type GLMEffects a = P.Sem '[P.Logger P.LogEntry, P.PrefixLog, P.Error GLMError, P.State AtomicErrorLog, P.Embed IO, P.Final IO] a
 
 type FixedPredictors = LA.Matrix Double
 type Observations = LA.Vector Double
