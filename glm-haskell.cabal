@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 9a6755f2ca4f44891dd3ef3f981bd17187144c7c3aaef1a49711fc53b06adcb8
+-- hash: 9035b4c2a6e530f03aaf65cb1aac908b6c2a41bd6d8e23173b0d19798bf6d138
 
 name:           glm-haskell
 version:        0.1.0.0
@@ -79,7 +79,7 @@ library
     , hmatrix-nlopt >=0.1.2 && <0.2
     , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.9
+    , knit-haskell >=0.8.0 && <0.10
     , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
@@ -137,7 +137,7 @@ test-suite CHOLMOD-test
     , hmatrix-nlopt >=0.1.2 && <0.2
     , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.9
+    , knit-haskell >=0.8.0 && <0.10
     , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
@@ -183,7 +183,7 @@ test-suite GLMM-test
     , hmatrix-nlopt >=0.1.2 && <0.2
     , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.9
+    , knit-haskell >=0.8.0 && <0.10
     , math-functions >=0.3.0 && <0.4
     , mtl
     , nonlinear-optimization >=0.3.11 && <0.4
@@ -232,7 +232,7 @@ test-suite LMM-test
     , hmatrix-nlopt >=0.1.2 && <0.2
     , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.9
+    , knit-haskell >=0.8.0 && <0.10
     , math-functions >=0.3.0 && <0.4
     , mtl
     , nonlinear-optimization >=0.3.11 && <0.4
