@@ -31,7 +31,7 @@ dependencies:
 - hmatrix-nlopt >= 0.1.2 && < 0.2
 - ieee754 >= 0.8.0 && < 0.9
 - kazura-queue >= 0.1.0 && < 0.2 
-- knit-haskell >= 0.8.0 && < 0.9
+- knit-haskell >= 0.8.0 && < 0.10
 - math-functions >= 0.3.0 && < 0.4
 - nonlinear-optimization >= 0.3.11 && < 0.4
 - nonlinear-optimization-ad >= 0.2 && < 0.3
