@@ -52,7 +52,7 @@ library
       Paths_glm_haskell
   hs-source-dirs:
       src
-  ghc-options: -O -Wall -fno-warn-unused-top-binds -funbox-strict-fields 
+  ghc-options: -O -Wall -fno-warn-unused-top-binds -funbox-strict-fields
   c-sources:
       src/Numeric/LinearAlgebra/CHOLMOD/cholmod_extras.c
   extra-libraries:
@@ -72,24 +72,24 @@ library
     , containers >=0.5.0.0 && <0.7
     , deepseq >=1.4.0 && <1.5
     , exceptions >=0.10.0 && <0.11
-    , extra >=1.6.17 && <1.7
+    , extra >=1.6.17 && <1.8
     , foldl >=1.4.0 && <=1.5
     , hcholmod >=0.1.0 && <0.2
     , hmatrix >=0.19.0 && <0.21
     , hmatrix-nlopt >=0.1.2 && <0.2
     , ieee754 >=0.8.0 && <0.9
     , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.10
+    , knit-haskell >=0.8.0 && <0.11
     , math-functions >=0.3.0 && <0.4
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
     , pandoc >=2.9.0
-    , polysemy >=0.7.0 && <1.4
+    , polysemy >=0.7.0 && <1.6
     , polysemy-RandomFu >=0.4.0.0 && <0.5
 --    , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
-    , primitive <=0.7.1
-    , profunctors >=5.3 && <5.5
+--    , primitive <=0.7.1
+    , profunctors >=5.3 && <5.7
     , random-fu >=0.2.7.3 && <0.3
     , say >=0.1.0.1 && <0.2
     , sparse-linear-algebra >=0.3 && <0.4
@@ -123,39 +123,39 @@ test-suite CHOLMOD-test
       lapack
       blas
   build-depends:
-      array >=0.5.3 && <0.6
-    , base >=4.7 && <5
-    , colonnade >=1.2.0 && <1.3
-    , containers >=0.5.0.0 && <0.7
-    , deepseq >=1.4.0 && <1.5
-    , exceptions >=0.10.0 && <0.11
-    , extra >=1.6.17 && <1.7
-    , foldl >=1.4.0 && <=1.5
+      array
+    , base
+    , colonnade
+    , containers
+    , deepseq
+    , exceptions
+    , extra
+    , foldl
     , glm-haskell
     , hcholmod
-    , hmatrix >=0.19.0 && <0.21
-    , hmatrix-nlopt >=0.1.2 && <0.2
-    , ieee754 >=0.8.0 && <0.9
-    , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.10
-    , math-functions >=0.3.0 && <0.4
-    , nonlinear-optimization >=0.3.11 && <0.4
-    , nonlinear-optimization-ad >=0.2 && <0.3
-    , pandoc >=2.9.0
-    , polysemy >=0.7.0 && <1.4
-    , polysemy-RandomFu >=0.4.0.0 && <0.5
-    , polysemy-plugin >=0.2.2 && <0.5
-    , polysemy-zoo >=0.3.0 && <0.8
-    , primitive <=0.7.1
-    , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.3 && <0.3
-    , say >=0.1.0.1 && <0.2
-    , sparse-linear-algebra >=0.3 && <0.4
-    , statistics >=0.15.0 && <0.16
-    , stm >=2.4.0 && <2.6
-    , text >=1.1.0.1 && <1.3
+    , hmatrix
+    , hmatrix-nlopt
+    , ieee754
+    , kazura-queue
+    , knit-haskell
+    , math-functions
+    , nonlinear-optimization
+    , nonlinear-optimization-ad
+    , pandoc
+    , polysemy
+    , polysemy-RandomFu
+    , polysemy-plugin
+    , polysemy-zoo
+--    , primitive <=0.7.1
+    , profunctors
+    , random-fu
+    , say
+    , sparse-linear-algebra
+    , statistics
+    , stm
+    , text
     , vector
-    , vector-split >=1.0.0 && <1.1
+    , vector-split
   default-language: Haskell2010
 
 test-suite GLMM-test
@@ -169,41 +169,41 @@ test-suite GLMM-test
   ghc-options: -O -Wall -threaded -rtsopts
   build-depends:
       Frames
-    , array >=0.5.3 && <0.6
-    , base >=4.7 && <5
-    , colonnade >=1.2.0 && <1.3
-    , containers >=0.5.0.0 && <0.7
-    , deepseq >=1.4.0 && <1.5
-    , exceptions >=0.10.0 && <0.11
-    , extra >=1.6.17 && <1.7
-    , foldl >=1.4.0 && <=1.5
+    , array
+    , base
+    , colonnade
+    , containers
+    , deepseq
+    , exceptions
+    , extra
+    , foldl
     , glm-haskell
-    , hcholmod >=0.1.0 && <0.2
-    , hmatrix >=0.19.0 && <0.21
-    , hmatrix-nlopt >=0.1.2 && <0.2
-    , ieee754 >=0.8.0 && <0.9
-    , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.10
-    , math-functions >=0.3.0 && <0.4
+    , hcholmod
+    , hmatrix
+    , hmatrix-nlopt
+    , ieee754
+    , kazura-queue
+    , knit-haskell
+    , math-functions
     , mtl
-    , nonlinear-optimization >=0.3.11 && <0.4
-    , nonlinear-optimization-ad >=0.2 && <0.3
-    , pandoc >=2.9.0
+    , nonlinear-optimization
+    , nonlinear-optimization-ad
+    , pandoc
     , pipes
-    , polysemy >=0.7.0 && <1.4
-    , polysemy-RandomFu >=0.4.0.0 && <0.5
-    , polysemy-plugin >=0.2.2 && <0.5
-    , polysemy-zoo >=0.3.0 && <0.8
-    , primitive <=0.7.1
-    , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.3 && <0.3
-    , say >=0.1.0.1 && <0.2
-    , sparse-linear-algebra >=0.3 && <0.4
-    , statistics >=0.15.0 && <0.16
-    , stm >=2.4.0 && <2.6
-    , text >=1.1.0.1 && <1.3
-    , vector >=0.11.0.0 && <0.13
-    , vector-split >=1.0.0 && <1.1
+    , polysemy
+    , polysemy-RandomFu
+    , polysemy-plugin
+    , polysemy-zoo
+--    , primitive <=0.7.1
+    , profunctors
+    , random-fu
+    , say
+    , sparse-linear-algebra
+    , statistics
+    , stm
+    , text
+    , vector
+    , vector-split
     , vinyl
   default-language: Haskell2010
 
@@ -218,40 +218,40 @@ test-suite LMM-test
   ghc-options: -O -Wall -threaded -rtsopts
   build-depends:
       Frames
-    , array >=0.5.3 && <0.6
-    , base >=4.7 && <5
-    , colonnade >=1.2.0 && <1.3
-    , containers >=0.5.0.0 && <0.7
-    , deepseq >=1.4.0 && <1.5
-    , exceptions >=0.10.0 && <0.11
-    , extra >=1.6.17 && <1.7
-    , foldl >=1.4.0 && <=1.5
+    , array
+    , base
+    , colonnade
+    , containers
+    , deepseq
+    , exceptions
+    , extra
+    , foldl
     , glm-haskell
-    , hcholmod >=0.1.0 && <0.2
-    , hmatrix >=0.19.0 && <0.21
-    , hmatrix-nlopt >=0.1.2 && <0.2
-    , ieee754 >=0.8.0 && <0.9
-    , kazura-queue >=0.1.0 && <0.2
-    , knit-haskell >=0.8.0 && <0.10
-    , math-functions >=0.3.0 && <0.4
+    , hcholmod
+    , hmatrix
+    , hmatrix-nlopt
+    , ieee754
+    , kazura-queue
+    , knit-haskell
+    , math-functions
     , mtl
-    , nonlinear-optimization >=0.3.11 && <0.4
-    , nonlinear-optimization-ad >=0.2 && <0.3
-    , pandoc >=2.9.0
+    , nonlinear-optimization
+    , nonlinear-optimization-ad
+    , pandoc
     , pipes
-    , polysemy >=0.7.0 && <1.4
-    , polysemy-RandomFu >=0.4.0.0 && <0.5
-    , polysemy-plugin >=0.2.2 && <0.5
-    , polysemy-zoo >=0.3.0 && <0.8
-    , primitive <=0.7.1
-    , profunctors >=5.3 && <5.5
-    , random-fu >=0.2.7.3 && <0.3
-    , say >=0.1.0.1 && <0.2
-    , sparse-linear-algebra >=0.3 && <0.4
-    , statistics >=0.15.0 && <0.16
-    , stm >=2.4.0 && <2.6
-    , text >=1.1.0.1 && <1.3
-    , vector >=0.11.0.0 && <0.13
-    , vector-split >=1.0.0 && <1.1
+    , polysemy
+    , polysemy-RandomFu
+    , polysemy-plugin
+    , polysemy-zoo
+--    , primitive <=0.7.1
+    , profunctors
+    , random-fu
+    , say
+    , sparse-linear-algebra
+    , statistics
+    , stm
+    , text
+    , vector
+    , vector-split
     , vinyl
   default-language: Haskell2010
