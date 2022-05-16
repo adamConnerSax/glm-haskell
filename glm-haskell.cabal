@@ -84,7 +84,7 @@ library
     , nonlinear-optimization >=0.3.11 && <0.4
     , nonlinear-optimization-ad >=0.2 && <0.3
     , pandoc >=2.9.0
-    , polysemy >=0.7.0 && <1.6
+    , polysemy >=0.7.0 && <1.7
     , polysemy-RandomFu >=0.4.0.0 && <0.5
 --    , polysemy-plugin >=0.2.2 && <0.5
     , polysemy-zoo >=0.3.0 && <0.8
